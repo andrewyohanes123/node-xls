@@ -390,21 +390,36 @@ section('12-charts', (wb) => {
 
 // ---------------------------------------------------------------------------
 section('13-pivots', (wb) => {
-  const data = [];
   const regions = ['East', 'West', 'North'];
   const cats = ['Furniture', 'Technology', 'Supplies'];
+  const data = [];
   let i = 0;
-  for (const r of regions) for (const c of cats) data.push({ Region: r, Category: c, Year: 2025 + (i % 2), Sales: 100 + 37 * i++, Units: i });
+  for (const r of regions) for (const c of cats) for (const y of [2025, 2026]) data.push({ Region: r, Category: c, Year: y, Sales: 100 + ((37 * i++) % 400), Units: 1 + (i % 7) });
   const ws = utils.json_to_sheet(data);
+  utils.set_range_style(ws, 'A1:E1', head);
   utils.book_append_sheet(wb, ws, 'Data');
   utils.add_pivot_table(wb, {
-    name: 'SalesPivot',
+    name: 'ByRegionCategory',
+    title: 'Sales by region and category (tabular, subtotals)',
     sourceSheet: 'Data',
     targetSheet: 'Pivot',
-    targetCell: 'A3',
-    rows: ['Region'],
-    cols: ['Category'],
-    values: [{ field: 'Sales', subtotal: 'sum', name: 'Total Sales' }],
+    targetCell: 'A1',
+    rows: ['Region', 'Category'],
+    cols: ['Year'],
+    values: [{ field: 'Sales', name: 'Total Sales', numFmt: '#,##0' }],
+  });
+  utils.add_pivot_table(wb, {
+    name: 'FilteredTwoValues',
+    title: 'Filtered to 2026, two value fields',
+    sourceSheet: 'Data',
+    targetSheet: 'Pivot',
+    targetCell: 'H1',
+    rows: ['Category'],
+    filters: [{ field: 'Year', selected: 2026 }],
+    values: [
+      { field: 'Sales', name: 'Revenue', numFmt: '$#,##0' },
+      { field: 'Units', name: 'Avg Units', subtotal: 'average', numFmt: '0.0' },
+    ],
   });
   return null;
 });

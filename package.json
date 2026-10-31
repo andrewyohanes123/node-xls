@@ -13,7 +13,8 @@
     "schemas": "scripts/fetch-schemas.sh",
     "showcase": "npm run build && node scripts/showcase.mjs",
     "inspect": "node scripts/inspect.mjs",
-    "render": "scripts/render.sh"
+    "render": "scripts/render.sh",
+    "excel-check": "npm run showcase && node scripts/excel-check.mjs"
   },
   "keywords": [
     "xlsx",

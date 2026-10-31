@@ -60,7 +60,7 @@ export function buildXlsxArchiveFiles(wb: WorkBook, opts?: WritingOptions): Reco
     const recordsPart = `xl/pivotCache/pivotCacheRecords${id}.xml`;
     const tablePart = `xl/pivotTables/pivotTable${id}.xml`;
     const recordsRid = pkg.addRel(cachePart, REL_TYPES.pivotCacheRecords, recordsPart);
-    const parts = generateOpenXmlPivotParts(source, pivot, id, recordsRid);
+    const parts = generateOpenXmlPivotParts(source, pivot, id, recordsRid, ctx.styles);
     pkg.addPart(cachePart, parts.cacheDefinitionXml, CONTENT_TYPES.pivotCacheDefinition);
     pkg.addPart(recordsPart, parts.cacheRecordsXml, CONTENT_TYPES.pivotCacheRecords);
     pkg.addPart(tablePart, parts.pivotTableXml, CONTENT_TYPES.pivotTable);

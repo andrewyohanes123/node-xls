@@ -1,93 +1,98 @@
 import { XMLParser } from 'fast-xml-parser';
-import { PivotTableDefinition, CellAddress, PivotDataField, PivotSubtotal, PivotFilter } from '../types.js';
+import { PivotTableDefinition, PivotDataField, PivotSubtotal, PivotFilter } from '../types.js';
 import { decode_range } from '../utils/address.js';
+import { unescapeXml } from '../xlsx/xml.js';
 
-export function parsePivotTableXml(
-  pivotXml: string,
-  cacheDefXml: string,
-  targetSheetName: string
-): PivotTableDefinition {
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    parseTagValue: false,
-    trimValues: false,
-    isArray: (name) => {
-      return ['field', 'cacheField', 'dataField', 'pivotField', 'pageField'].includes(name);
-    },
-  });
+const parser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  parseTagValue: false,
+  trimValues: false,
+  isArray: (name) => ['field', 'cacheField', 'dataField', 'pivotField', 'pageField', 'item'].includes(name),
+});
 
-  const parsedPivot = parser.parse(pivotXml)?.pivotTableDefinition || {};
-  const parsedCache = parser.parse(cacheDefXml)?.pivotCacheDefinition || {};
+type Shared = Array<string | number | boolean | null>;
 
-  // Extract source
-  const wsSource = parsedCache.cacheSource?.worksheetSource || {};
-  const sourceSheet = wsSource['@_sheet'] || '';
-  const sourceRefStr = wsSource['@_ref'] || 'A1';
-  const sourceRange = decode_range(sourceRefStr);
+/** Shared items of every cache field, in document order (types are interleaved, so parse by regex). */
+function sharedItems(cacheXml: string): Shared[] {
+  const out: Shared[] = [];
+  for (const field of cacheXml.matchAll(/<cacheField\b[^>]*?(?:\/>|>([\s\S]*?)<\/cacheField>)/g)) {
+    const items: Shared = [];
+    const body = /<sharedItems\b[^>]*>([\s\S]*?)<\/sharedItems>/.exec(field[1] ?? '')?.[1] ?? '';
+    for (const m of body.matchAll(/<(s|n|b|d|m|e)\b(?:\s+v="([^"]*)")?[^>]*\/?>/g)) {
+      const v = m[2] === undefined ? undefined : unescapeXml(m[2]);
+      if (m[1] === 'm') items.push(null);
+      else if (m[1] === 'n') items.push(Number(v));
+      else if (m[1] === 'b') items.push(v === '1' || v === 'true');
+      else items.push(v ?? '');
+    }
+    out.push(items);
+  }
+  return out;
+}
 
-  // Extract cache field names
-  const cacheFields = parsedCache.cacheFields?.cacheField || [];
-  const fieldNames: string[] = cacheFields.map((cf: any) => cf['@_name'] || '');
+export function parsePivotTableXml(pivotXml: string, cacheDefXml: string, targetSheetName: string): PivotTableDefinition {
+  const pivot = parser.parse(pivotXml)?.pivotTableDefinition || {};
+  const cache = parser.parse(cacheDefXml)?.pivotCacheDefinition || {};
 
-  // Extract layout
-  const location = parsedPivot.location || {};
-  const targetRefStr = location['@_ref'] || 'A1:B2';
-  const targetRange = decode_range(targetRefStr);
-  const targetCell: CellAddress = targetRange.s;
+  const ws = cache.cacheSource?.worksheetSource || {};
+  const fieldNames: string[] = (cache.cacheFields?.cacheField || []).map((cf: any) => cf['@_name'] || '');
+  const shared = sharedItems(cacheDefXml);
+  const pivotFields: any[] = pivot.pivotFields?.pivotField || [];
+  const name = (idx: number) => (idx >= 0 && fieldNames[idx] !== undefined ? fieldNames[idx] : undefined);
 
-  const rowFieldNodes = parsedPivot.rowFields?.field || [];
-  const rows: string[] = rowFieldNodes
-    .map((rf: any) => {
-      const idx = Number(rf['@_x']);
-      return !isNaN(idx) && fieldNames[idx] ? fieldNames[idx] : undefined;
-    })
-    .filter((f: any): f is string => Boolean(f));
+  const location = pivot.location || {};
+  const targetRange = decode_range(location['@_ref'] || 'A1');
+  const pageRows = Number(location['@_rowPageCount'] || 0);
+  const targetCell = { r: pageRows ? Math.max(0, targetRange.s.r - pageRows - 1) : targetRange.s.r, c: targetRange.s.c };
 
-  const colFieldNodes = parsedPivot.colFields?.field || [];
-  const cols: string[] = colFieldNodes
-    .map((cf: any) => {
-      const idx = Number(cf['@_x']);
-      return !isNaN(idx) && fieldNames[idx] ? fieldNames[idx] : undefined;
-    })
-    .filter((f: any): f is string => Boolean(f));
+  const fieldsOf = (node: any): string[] =>
+    (node?.field || [])
+      .map((f: any) => Number(f['@_x']))
+      .filter((x: number) => x >= 0)
+      .map(name)
+      .filter((n: string | undefined): n is string => n !== undefined);
 
-  const pageFieldNodes = parsedPivot.pageFields?.pageField || [];
-  const filters: PivotFilter[] = pageFieldNodes
+  const filters: PivotFilter[] = (pivot.pageFields?.pageField || [])
     .map((pf: any) => {
-      const idx = Number(pf['@_fld']);
-      return !isNaN(idx) && fieldNames[idx] ? { field: fieldNames[idx] } : undefined;
+      const fld = Number(pf['@_fld']);
+      const field = name(fld);
+      if (field === undefined) return undefined;
+      const filter: PivotFilter = { field };
+      if (pf['@_item'] !== undefined) {
+        const item = (pivotFields[fld]?.items?.item || [])[Number(pf['@_item'])];
+        const x = item?.['@_x'];
+        const value = x !== undefined ? shared[fld]?.[Number(x)] : undefined;
+        if (value !== undefined && value !== null) filter.selected = value;
+      }
+      return filter;
     })
-    .filter((f: any): f is PivotFilter => Boolean(f));
+    .filter((f: PivotFilter | undefined): f is PivotFilter => f !== undefined);
 
-  const dataFieldNodes = parsedPivot.dataFields?.dataField || [];
-  const values: PivotDataField[] = dataFieldNodes.map((df: any) => {
-    const fldIdx = Number(df['@_fld']);
-    const fieldName = !isNaN(fldIdx) && fieldNames[fldIdx] ? fieldNames[fldIdx] : `Field${fldIdx}`;
+  const values: PivotDataField[] = (pivot.dataFields?.dataField || []).map((df: any) => {
+    const fld = Number(df['@_fld']);
+    const field = name(fld) ?? `Field${fld}`;
     const subtotal = (df['@_subtotal'] || 'sum') as PivotSubtotal;
-    const subLabel = subtotal.charAt(0).toUpperCase() + subtotal.slice(1);
-    const name = df['@_name'] || `${subLabel} of ${fieldName}`;
-    return {
-      field: fieldName,
-      name,
-      subtotal,
-    };
+    return { field, name: df['@_name'] ?? `${subtotal} of ${field}`, subtotal };
   });
 
-  const styleInfo = parsedPivot.pivotTableStyleInfo || {};
-  const styleName = styleInfo['@_name'];
-
-  return {
-    name: parsedPivot['@_name'] || 'PivotTable',
-    sourceSheet,
-    sourceRange,
+  const axisFields = pivotFields.filter((f) => f['@_axis'] === 'axisRow' || f['@_axis'] === 'axisCol');
+  const def: PivotTableDefinition = {
+    name: pivot['@_name'] || 'PivotTable',
+    sourceSheet: ws['@_sheet'] || '',
+    sourceRange: decode_range(ws['@_ref'] || 'A1'),
     targetSheet: targetSheetName,
     targetCell,
     targetRange,
-    rows,
-    cols,
+    rows: fieldsOf(pivot.rowFields),
+    cols: fieldsOf(pivot.colFields),
     values,
     filters,
-    styleName,
+    showRowTotals: pivot['@_rowGrandTotals'] !== '0',
+    showColTotals: pivot['@_colGrandTotals'] !== '0',
+    showSubtotals: !axisFields.length || axisFields.some((f) => f['@_defaultSubtotal'] !== '0'),
   };
+  const style = pivot.pivotTableStyleInfo?.['@_name'];
+  if (style) def.styleName = style;
+  return def;
 }

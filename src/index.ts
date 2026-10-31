@@ -196,7 +196,7 @@ export const utils = {
 
   // Pivot table extensions
   add_pivot_table,
-  compute_pivot_table: (data: Array<Record<string, any>>, options: Parameters<typeof computePivotData>[1]) => computePivotData(data, options),
+  compute_pivot_table: computePivotData,
 
   consts: { SHEET_VISIBLE: 0, SHEET_HIDDEN: 1, SHEET_VERY_HIDDEN: 2 } as const,
 };

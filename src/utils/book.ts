@@ -1,6 +1,9 @@
 import { WorkBook, WorkSheet, PivotTableDefinition, PivotTableOptions, PivotDataField, PivotFilter, Range, CellAddress } from '../types.js';
+import { defaultDataFieldName } from '../pivot/aggregate.js';
 import { decode_range, decode_cell, parse_range_spec } from './address.js';
-import { extractSheetData, computePivotData, renderPivotToWorksheet } from '../pivot/compute.js';
+import { readSource } from '../pivot/source.js';
+import { buildLayout } from '../pivot/layout.js';
+import { renderPivot } from '../pivot/render.js';
 import { checkSheetName } from '../xlsx/workbook.js';
 
 /** New workbook, optionally with a first sheet (SheetJS signature). */
@@ -47,10 +50,9 @@ export function book_set_sheet_visibility(wb: WorkBook, sheet: number | string, 
 }
 
 function normaliseDataField(v: string | PivotDataField): PivotDataField {
-  if (typeof v === 'string') return { field: v, subtotal: 'sum', name: `Sum of ${v}` };
+  if (typeof v === 'string') return { field: v, subtotal: 'sum', name: defaultDataFieldName('sum', v) };
   const subtotal = v.subtotal || 'sum';
-  const label = subtotal.charAt(0).toUpperCase() + subtotal.slice(1);
-  return { ...v, subtotal, name: v.name || `${label} of ${v.field}` };
+  return { ...v, subtotal, name: v.name || defaultDataFieldName(subtotal, v.field) };
 }
 
 export function add_pivot_table(wb: WorkBook, options: PivotTableOptions): PivotTableDefinition {
@@ -97,11 +99,17 @@ export function add_pivot_table(wb: WorkBook, options: PivotTableOptions): Pivot
     ...(options.title !== undefined ? { title: options.title } : {}),
   };
 
-  if (pivotDef.renderCells !== false) {
-    const { rows } = extractSheetData(sourceSheet, sourceRange);
-    const comp = computePivotData(rows, pivotDef);
-    pivotDef.targetRange = renderPivotToWorksheet(targetSheet, pivotDef, comp);
+  // validates fields/filters up front and fixes the pivot area
+  const layout = buildLayout(pivotDef, readSource(sourceSheet, sourceRange));
+  pivotDef.targetRange = layout.geometry.location;
+  for (const other of [...(wb.PivotTables ?? []), ...(targetSheet['!pivots'] ?? [])]) {
+    const o = other.targetRange;
+    const a = layout.geometry.location;
+    if (other.targetSheet === targetSheetName && o && a.s.r <= o.e.r && o.s.r <= a.e.r && a.s.c <= o.e.c && o.s.c <= a.e.c) {
+      throw new Error(`Pivot table ${pivotDef.name} overlaps pivot table ${other.name}`);
+    }
   }
+  if (pivotDef.renderCells !== false) renderPivot(targetSheet, pivotDef, layout);
 
   (wb.PivotTables ??= []).push(pivotDef);
   (targetSheet['!pivots'] ??= []).push(pivotDef);
