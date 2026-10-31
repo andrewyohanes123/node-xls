@@ -24,7 +24,7 @@ function mediaPart(ctx: WriteContext, bytes: Uint8Array, ext: string, contentTyp
 function pictureXml(ctx: WriteContext, ws: WorkSheet, img: SheetImage, drawingPart: string, id: number): string {
   const bytes = toBytes(img.data);
   const type = img.type ?? detectImageType(bytes);
-  if (!type) throw new Error('Unsupported image format (use PNG, JPEG, GIF, BMP, TIFF, EMF or WMF)');
+  if (!type || !(type in IMAGE_EXTENSIONS)) throw new Error(`Unsupported image format${type ? ` "${type}"` : ''} (use PNG, JPEG, GIF, BMP, TIFF, EMF or WMF)`);
   const detected = detectImageType(bytes);
   if (detected && detected !== type) throw new Error(`Image data is ${detected} but type "${type}" was given`);
   const part = mediaPart(ctx, bytes, IMAGE_EXTENSIONS[type], IMAGE_CONTENT_TYPES[type]);

@@ -1,5 +1,5 @@
-import { WorkBook, ParsingOptions, WritingOptions, WorkSheet } from '../types.js';
-import { sheet_to_csv, aoa_to_sheet, sheet_to_html } from '../utils/sheet.js';
+import { WorkBook, ParsingOptions, WritingOptions, WorkSheet, CellObject, Sheet2CSVOpts } from '../types.js';
+import { sheet_to_csv, sheet_to_txt, aoa_to_sheet, sheet_to_html } from '../utils/sheet.js';
 import { book_new, book_append_sheet } from '../utils/book.js';
 
 /** RFC 4180 parser (quoted fields, escaped quotes, CRLF/LF/CR line breaks). */
@@ -39,11 +39,18 @@ export function parseCsv(text: string, fs = ','): string[][] {
   return lines;
 }
 
+/** Picks the separator occurring most often outside quotes in the first record. */
 function detectSeparator(text: string): string {
-  const firstLine = text.slice(0, text.search(/\r|\n/) === -1 ? undefined : text.search(/\r|\n/));
-  const counts = [',', '\t', ';', '|'].map((s) => [s, firstLine.split(s).length - 1] as const);
-  counts.sort((a, b) => b[1] - a[1]);
-  return counts[0][1] > 0 ? counts[0][0] : ',';
+  const counts: Record<string, number> = { ',': 0, '\t': 0, ';': 0, '|': 0 };
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') quoted = !quoted;
+    else if (!quoted && (ch === '\n' || ch === '\r')) break;
+    else if (!quoted && ch in counts) counts[ch]++;
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best[1] > 0 ? best[0] : ',';
 }
 
 /**
@@ -58,22 +65,27 @@ export function parsePlainNumber(s: string): number | undefined {
   return n === 0 ? 0 : n;
 }
 
+/** Typed cell for an imported text value; `w` keeps the source text (as SheetJS does). */
+export function textToCell(val: string, raw?: boolean): CellObject | undefined {
+  if (raw) return { t: 's', v: val };
+  const trimmed = val.trim();
+  if (trimmed === '') return undefined;
+  const upper = trimmed.toUpperCase();
+  if (upper === 'TRUE' || upper === 'FALSE') return { t: 'b', v: upper === 'TRUE', w: trimmed };
+  const n = parsePlainNumber(trimmed);
+  if (n !== undefined) return { t: 'n', v: n, w: trimmed };
+  return { t: 's', v: val };
+}
+
 export function readCsv(data: string, opts?: ParsingOptions): WorkBook {
-  const text = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
-  const fs = opts?.FS || detectSeparator(text);
+  let text = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
+  // Excel's "sep=;" directive line
+  const sep = /^sep=(.)\r?\n/i.exec(text);
+  if (sep) text = text.slice(sep[0].length);
+  const fs = opts?.FS || sep?.[1] || detectSeparator(text);
   let rows = parseCsv(text, fs);
   if (opts?.sheetRows && opts.sheetRows > 0) rows = rows.slice(0, opts.sheetRows);
-  const converted = rows.map((row) =>
-    row.map((val) => {
-      if (opts?.raw) return val;
-      const trimmed = val.trim();
-      if (trimmed === '') return undefined;
-      const upper = trimmed.toUpperCase();
-      if (upper === 'TRUE') return true;
-      if (upper === 'FALSE') return false;
-      return parsePlainNumber(trimmed) ?? val;
-    })
-  );
+  const converted = rows.map((row) => row.map((val) => textToCell(val, opts?.raw)));
   const wb = book_new();
   book_append_sheet(wb, aoa_to_sheet(converted), 'Sheet1');
   return wb;
@@ -87,7 +99,17 @@ export function pickSheet(wb: WorkBook, sheet?: string | number): WorkSheet {
 
 export function writeCsv(wb: WorkBook, opts?: WritingOptions): string {
   const ws = pickSheet(wb, opts?.sheet);
-  return opts?.bookType === 'txt' ? sheet_to_csv(ws, { FS: '\t' }) : sheet_to_csv(ws);
+  const o: Sheet2CSVOpts = {
+    FS: opts?.FS,
+    RS: opts?.RS,
+    strip: opts?.strip,
+    blankrows: opts?.blankrows,
+    forceQuotes: opts?.forceQuotes,
+    skipHidden: opts?.skipHidden,
+    dateNF: opts?.dateNF,
+    rawNumbers: opts?.rawNumbers,
+  };
+  return opts?.bookType === 'txt' ? sheet_to_txt(ws, o) : sheet_to_csv(ws, o);
 }
 
 export function writeHtml(wb: WorkBook, opts?: WritingOptions): string {

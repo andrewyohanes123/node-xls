@@ -9,7 +9,7 @@ import { CellObject, ChartAxisOptions, ChartSeries, Color, SheetChart, WorkSheet
 import { WriteContext } from '../xlsx/context.js';
 import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, escapeAttr, escapeXml } from '../xlsx/xml.js';
 import { absoluteRef, decode_range, encode_cell, parseSheetRef, wholeRangeRef } from '../utils/address.js';
-import { format_cell } from '../utils/format.js';
+import { format_cell, resolveFormat } from '../utils/format.js';
 import { dateToSerial } from '../utils/dates.js';
 import { resolveAnchor, twoCellAnchorXml } from '../drawing/anchor.js';
 import { normalizeRgb } from '../styles/index.js';
@@ -31,7 +31,8 @@ export function drawingColor(color: Color | undefined, fallbackAccent: number): 
 
 interface ResolvedRef {
   f: string;
-  cells: Array<CellObject | undefined>;
+  /** undefined for formulas that cannot be resolved here (defined names, multi-area ranges, #REF!): no cache is written. */
+  cells?: Array<CellObject | undefined>;
 }
 
 function resolveRef(ctx: WriteContext, ref: string, defaultSheet: string, what: string): ResolvedRef {
@@ -39,10 +40,14 @@ function resolveRef(ctx: WriteContext, ref: string, defaultSheet: string, what: 
   try {
     parsed = parseSheetRef(ref);
   } catch {
+    // formulas Excel accepts but node-xls cannot evaluate are passed through without a cache
+    const f = ref.trim().replace(/^=/, '');
+    const isName = (ctx.wb.Workbook?.Names ?? []).some((n) => n.Name.toLowerCase() === f.replace(/^.*!/, '').toLowerCase());
+    if (isName || f.includes('#REF!') || (f.startsWith('(') && f.includes(','))) return { f };
     throw new Error(`Chart ${what}: invalid range "${ref}"`);
   }
   const sheet = parsed.sheet ?? defaultSheet;
-  const ws = ctx.wb.Sheets[sheet];
+  const ws = ctx.wb.SheetNames.includes(sheet) ? ctx.wb.Sheets[sheet] : undefined;
   if (!ws) throw new Error(`Chart ${what}: sheet "${sheet}" not found`);
   const cells: Array<CellObject | undefined> = [];
   const { s } = parsed.range;
@@ -66,27 +71,41 @@ function strLitXml(values: Array<string | number>): string {
   return `<c:strLit><c:ptCount val="${values.length}"/>${pts}</c:strLit>`;
 }
 
-const isRef = (s: string) => /!\$?[A-Za-z]{1,3}\$?\d+/.test(s);
+/** A series name is a cell reference only if it parses as one and names an existing sheet. */
+function isCellRef(ctx: WriteContext, s: string): boolean {
+  if (!s.includes('!')) return false;
+  try {
+    const p = parseSheetRef(s);
+    return p.sheet !== undefined && ctx.wb.SheetNames.includes(p.sheet);
+  } catch {
+    return false;
+  }
+}
 
 function numberOf(ctx: WriteContext, cell: CellObject | undefined): number | undefined {
-  if (!cell) return undefined;
+  if (!cell || cell.t === 'e') return undefined; // error values are gaps, not their numeric codes
   if (typeof cell.v === 'number' && Number.isFinite(cell.v)) return cell.v;
   if (cell.v instanceof Date) return dateToSerial(cell.v, { date1904: ctx.date1904 });
   return undefined;
 }
 
 function numRefXml(ctx: WriteContext, r: ResolvedRef): string {
-  const fmt = r.cells.find((c) => c?.z !== undefined)?.z;
+  if (!r.cells) return `<c:numRef><c:f>${escapeXml(r.f)}</c:f></c:numRef>`;
+  // the cache uses the number format of the first value (cell style first, as the writer does)
+  const first = r.cells.find((c) => numberOf(ctx, c) !== undefined);
+  const fmtRaw = first?.s?.numFmt ?? first?.z ?? (first?.v instanceof Date || first?.t === 'd' ? 14 : undefined);
+  const fmt = fmtRaw === undefined ? 'General' : resolveFormat(fmtRaw);
   const pts = r.cells
     .map((c, i) => {
       const n = numberOf(ctx, c);
       return n === undefined ? '' : `<c:pt idx="${i}"><c:v>${n}</c:v></c:pt>`;
     })
     .join('');
-  return `<c:numRef><c:f>${escapeXml(r.f)}</c:f><c:numCache><c:formatCode>${escapeXml(typeof fmt === 'string' ? fmt : 'General')}</c:formatCode><c:ptCount val="${r.cells.length}"/>${pts}</c:numCache></c:numRef>`;
+  return `<c:numRef><c:f>${escapeXml(r.f)}</c:f><c:numCache><c:formatCode>${escapeXml(fmt)}</c:formatCode><c:ptCount val="${r.cells.length}"/>${pts}</c:numCache></c:numRef>`;
 }
 
 function strRefXml(r: ResolvedRef): string {
+  if (!r.cells) return `<c:strRef><c:f>${escapeXml(r.f)}</c:f></c:strRef>`;
   const pts = r.cells
     .map((c, i) => (c && c.t !== 'z' ? `<c:pt idx="${i}"><c:v>${escapeXml(format_cell(c))}</c:v></c:pt>` : ''))
     .join('');
@@ -97,13 +116,13 @@ function strRefXml(r: ResolvedRef): string {
 function axisDataXml(ctx: WriteContext, tag: string, ref: string | Array<string | number>, sheet: string): string {
   if (Array.isArray(ref)) return `<c:${tag}>${ref.every((v) => typeof v === 'number') ? numLitXml(ref) : strLitXml(ref)}</c:${tag}>`;
   const r = resolveRef(ctx, ref, sheet, tag);
-  const numeric = r.cells.every((c) => c === undefined || numberOf(ctx, c) !== undefined);
+  const numeric = !r.cells || r.cells.every((c) => c === undefined || numberOf(ctx, c) !== undefined);
   return `<c:${tag}>${numeric ? numRefXml(ctx, r) : strRefXml(r)}</c:${tag}>`;
 }
 
 function seriesTextXml(ctx: WriteContext, name: string | undefined, sheet: string): string {
   if (name === undefined) return '';
-  if (isRef(name)) return `<c:tx>${strRefXml(resolveRef(ctx, name, sheet, 'series name'))}</c:tx>`;
+  if (isCellRef(ctx, name)) return `<c:tx>${strRefXml(resolveRef(ctx, name, sheet, 'series name'))}</c:tx>`;
   return `<c:tx><c:v>${escapeXml(name)}</c:v></c:tx>`;
 }
 
@@ -224,6 +243,13 @@ function plotAreaXml(ctx: WriteContext, input: SheetChart, sheet: string): strin
 }
 
 export function buildChartXml(ctx: WriteContext, chart: SheetChart, sheet: string): string {
+  // schema ranges: ST_HoleSize 1-90 (Excel UI 10-90), ST_GapAmount 0-500
+  if (chart.holeSize !== undefined && !(Number.isInteger(chart.holeSize) && chart.holeSize >= 1 && chart.holeSize <= 90)) {
+    throw new Error(`Chart holeSize must be an integer from 1 to 90 (got ${chart.holeSize})`);
+  }
+  if (chart.gapWidth !== undefined && !(Number.isInteger(chart.gapWidth) && chart.gapWidth >= 0 && chart.gapWidth <= 500)) {
+    throw new Error(`Chart gapWidth must be an integer from 0 to 500 (got ${chart.gapWidth})`);
+  }
   const legend = chart.legend === false ? '' : `<c:legend><c:legendPos val="${chart.legend ?? 'r'}"/><c:overlay val="0"/></c:legend>`;
   return (
     `${XML_HEADER}<c:chartSpace xmlns:c="${NS.c}" xmlns:a="${NS.a}" xmlns:r="${NS.r}">` +

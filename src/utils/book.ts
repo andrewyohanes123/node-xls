@@ -1,9 +1,9 @@
 import { WorkBook, WorkSheet, PivotTableDefinition, PivotTableOptions, PivotDataField, PivotFilter, Range, CellAddress } from '../types.js';
 import { defaultDataFieldName } from '../pivot/aggregate.js';
-import { decode_range, decode_cell, parse_range_spec } from './address.js';
+import { decode_range, decode_cell, encode_range, normaliseMerges, parse_range_spec } from './address.js';
 import { readSource } from '../pivot/source.js';
 import { buildLayout } from '../pivot/layout.js';
-import { renderPivot } from '../pivot/render.js';
+import { renderPivot, pivotArea } from '../pivot/render.js';
 import { checkSheetName } from '../xlsx/workbook.js';
 
 /** New workbook, optionally with a first sheet (SheetJS signature). */
@@ -100,15 +100,34 @@ export function add_pivot_table(wb: WorkBook, options: PivotTableOptions): Pivot
   };
 
   // validates fields/filters up front and fixes the pivot area
-  const layout = buildLayout(pivotDef, readSource(sourceSheet, sourceRange));
+  const date1904 = Boolean(wb.Workbook?.WBProps?.date1904);
+  const layout = buildLayout(pivotDef, readSource(sourceSheet, sourceRange, { date1904 }), { date1904 });
   pivotDef.targetRange = layout.geometry.location;
-  for (const other of [...(wb.PivotTables ?? []), ...(targetSheet['!pivots'] ?? [])]) {
-    const o = other.targetRange;
-    const a = layout.geometry.location;
-    if (other.targetSheet === targetSheetName && o && a.s.r <= o.e.r && o.s.r <= a.e.r && a.s.c <= o.e.c && o.s.c <= a.e.c) {
-      throw new Error(`Pivot table ${pivotDef.name} overlaps pivot table ${other.name}`);
+  const area = pivotArea(layout);
+  const overlaps = (a: Range, b: Range) => a.s.r <= b.e.r && b.s.r <= a.e.r && a.s.c <= b.e.c && b.s.c <= a.e.c;
+  const where = `Pivot table ${pivotDef.name}`;
+  const pivots = new Set<PivotTableDefinition>(wb.PivotTables ?? []);
+  for (const n of wb.SheetNames) for (const p of wb.Sheets[n]?.['!pivots'] ?? []) pivots.add(p);
+  for (const other of pivots) {
+    if (!other.targetRange) continue;
+    // an existing pivot owns its title/filter rows too
+    const otherArea: Range = { s: { r: Math.min(other.targetCell.r, other.targetRange.s.r), c: other.targetRange.s.c }, e: other.targetRange.e };
+    if (other.targetSheet === targetSheetName && overlaps(area, otherArea)) throw new Error(`${where} overlaps pivot table ${other.name}`);
+    if (other.targetSheet === options.sourceSheet && overlaps(layout.source.range, otherArea)) {
+      throw new Error(`${where}: source range includes the cells of pivot table ${other.name}`);
     }
   }
+  if (targetSheetName === options.sourceSheet && overlaps(area, layout.source.range)) {
+    throw new Error(`${where} would overwrite its own source range; place it elsewhere or on another sheet`);
+  }
+  for (const t of targetSheet['!tables'] ?? []) {
+    if (overlaps(area, decode_range(t.ref))) throw new Error(`${where} overlaps table ${t.name}`);
+  }
+  for (const m of normaliseMerges(targetSheet['!merges'])) {
+    if (overlaps(area, m)) throw new Error(`${where} overlaps merged cells ${encode_range(m)}`);
+  }
+  const af = targetSheet['!autofilter']?.ref;
+  if (af && overlaps(area, decode_range(af))) throw new Error(`${where} overlaps the sheet autofilter`);
   if (pivotDef.renderCells !== false) renderPivot(targetSheet, pivotDef, layout);
 
   (wb.PivotTables ??= []).push(pivotDef);

@@ -8,7 +8,7 @@
 import { CFValue, Color, ConditionalFormat, ConditionalFormatRule, CFTimePeriod } from '../types.js';
 import { StyleBuilder, colorXml } from '../styles/index.js';
 import { attrs, AttrValue, escapeAttr, escapeXml } from '../xlsx/xml.js';
-import { decode_range, encode_cell } from '../utils/address.js';
+import { checkFormula, checkSqref, decode_range, encode_cell } from '../utils/address.js';
 
 const TIME_PERIOD_FORMULAS: Record<CFTimePeriod, (c: string) => string> = {
   today: (c) => `FLOOR(${c},1)=TODAY()`,
@@ -54,7 +54,10 @@ function ruleXml(rule: ConditionalFormatRule, sqref: string, priority: number, s
   const base: Array<[string, AttrValue]> = [['type', rule.type]];
   let children = '';
   const cell = topLeft(sqref);
-  const f = (x: string) => `<formula>${escapeXml(x)}</formula>`;
+  const f = (x: string) => {
+    checkFormula(x, `Conditional format ${sqref}`);
+    return `<formula>${escapeXml(x)}</formula>`;
+  };
 
   switch (rule.type) {
     case 'colorScale': {
@@ -163,6 +166,7 @@ export function conditionalFormattingXml(list: ConditionalFormat[], styles: Styl
   return blocks
     .map((cf, b) => {
       const sqref = cf.ref.replace(/\$/g, '').trim();
+      checkSqref(sqref, 'Conditional format');
       const rules = cf.rules.map((r, i) => ruleXml(r, sqref, priority.get(`${b}:${i}`)!, styles)).join('');
       return `<conditionalFormatting sqref="${escapeAttr(sqref)}">${rules}</conditionalFormatting>`;
     })

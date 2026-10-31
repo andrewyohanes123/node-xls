@@ -12,7 +12,7 @@ import { PivotTableDefinition, WorkSheet } from '../types.js';
 import { escapeAttr, XML_HEADER, NS } from '../xlsx/xml.js';
 import { encode_range, wholeRangeRef } from '../utils/address.js';
 import { StyleBuilder } from '../styles/index.js';
-import { readSource, PivotValue, SourceData } from './source.js';
+import { readSource, PivotValue, SourceData, isPivotError } from './source.js';
 import { AxisEntry, PivotLayout, buildLayout, itemKey } from './layout.js';
 
 export interface OpenXmlPivotParts {
@@ -24,14 +24,15 @@ export interface OpenXmlPivotParts {
 
 const DAY_MS = 86_400_000;
 
-function isoDate(serial: number): string {
-  const s = serial < 61 ? serial + 1 : serial;
+function isoDate(serial: number, date1904: boolean): string {
+  const s = date1904 ? serial + 1462 : serial < 61 ? serial + 1 : serial;
   return new Date(Math.round(s * DAY_MS) + Date.UTC(1899, 11, 30)).toISOString().slice(0, 19);
 }
 
-function valueXml(v: PivotValue, isDate: boolean): string {
+function valueXml(v: PivotValue, isDate: boolean, date1904: boolean): string {
   if (v === null) return '<m/>';
-  if (typeof v === 'number') return isDate ? `<d v="${isoDate(v)}"/>` : `<n v="${v}"/>`;
+  if (isPivotError(v)) return `<e v="${escapeAttr(v.error)}"/>`;
+  if (typeof v === 'number') return isDate ? `<d v="${isoDate(v, date1904)}"/>` : `<n v="${v}"/>`;
   if (typeof v === 'boolean') return `<b v="${v ? 1 : 0}"/>`;
   return `<s v="${escapeAttr(v)}"/>`;
 }
@@ -41,33 +42,39 @@ function isDateField(source: SourceData, field: number): boolean {
   return (
     source.dateFields.has(field) &&
     values.some((v) => typeof v === 'number') &&
-    !values.some((v) => typeof v === 'string' || typeof v === 'boolean')
+    !values.some((v) => typeof v === 'string' || typeof v === 'boolean' || isPivotError(v))
   );
 }
 
-function sharedItemsXml(source: SourceData, field: number, listed: PivotValue[] | undefined): string {
+function sharedItemsXml(source: SourceData, field: number, listed: PivotValue[] | undefined, date1904: boolean): string {
   const values = source.records.map((r) => r[field]);
   const strings = values.filter((v): v is string => typeof v === 'string');
   const numbers = values.filter((v): v is number => typeof v === 'number');
   const hasBool = values.some((v) => typeof v === 'boolean');
+  const hasError = values.some(isPivotError);
   const hasBlank = values.some((v) => v === null);
   const isDate = isDateField(source, field);
-  const kinds = [strings.length > 0, numbers.length > 0, hasBool].filter(Boolean).length;
-  const min = numbers.length ? Math.min(...numbers) : 0;
-  const max = numbers.length ? Math.max(...numbers) : 0;
+  // MS-OI29500 18.10.1.90: booleans and errors count as text for these flags
+  const textLike = strings.length > 0 || hasBool || hasError;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const n of numbers) {
+    if (n < min) min = n;
+    if (n > max) max = n;
+  }
   const a: Array<[string, string | number | undefined]> = [
-    ['containsSemiMixedTypes', strings.length === 0 && !hasBlank ? '0' : undefined],
+    ['containsSemiMixedTypes', !textLike && !hasBlank ? '0' : undefined],
     ['containsNonDate', isDate ? '0' : undefined],
     ['containsDate', isDate ? '1' : undefined],
-    ['containsString', strings.length === 0 ? '0' : undefined],
+    ['containsString', !textLike ? '0' : undefined],
     ['containsBlank', hasBlank ? '1' : undefined],
-    ['containsMixedTypes', kinds > 1 ? '1' : undefined],
+    ['containsMixedTypes', textLike && numbers.length > 0 ? '1' : undefined],
     ['containsNumber', numbers.length && !isDate ? '1' : undefined],
     ['containsInteger', numbers.length && !isDate && numbers.every(Number.isInteger) ? '1' : undefined],
     ['minValue', numbers.length && !isDate ? min : undefined],
     ['maxValue', numbers.length && !isDate ? max : undefined],
-    ['minDate', isDate ? isoDate(min) : undefined],
-    ['maxDate', isDate ? isoDate(max + 1) : undefined],
+    ['minDate', isDate ? isoDate(min, date1904) : undefined],
+    ['maxDate', isDate ? isoDate(max + 1, date1904) : undefined],
     ['count', listed ? listed.length : undefined],
     ['longText', strings.some((s) => s.length > 255) ? '1' : undefined],
   ];
@@ -76,7 +83,7 @@ function sharedItemsXml(source: SourceData, field: number, listed: PivotValue[] 
     .map(([k, v]) => ` ${k}="${v}"`)
     .join('');
   if (!listed) return `<sharedItems${attrs}/>`;
-  return `<sharedItems${attrs}>${listed.map((v) => valueXml(v, isDate)).join('')}</sharedItems>`;
+  return `<sharedItems${attrs}>${listed.map((v) => valueXml(v, isDate, date1904)).join('')}</sharedItems>`;
 }
 
 /** <i> elements for an axis: r = members repeated from the previous item, i = data field index. */
@@ -94,7 +101,8 @@ function axisItemsXml(tag: 'rowItems' | 'colItems', entries: AxisEntry[]): strin
       .map((v) => (v ? `<x v="${v}"/>` : '<x/>'))
       .join('');
     const attrs = `${e.type === 'subtotal' ? ' t="default"' : ''}${r ? ` r="${r}"` : ''}${e.data ? ` i="${e.data}"` : ''}`;
-    prev = e.type === 'item' ? e.path : [];
+    // a subtotal row stands for its members too: the next item repeats the shared outer members
+    prev = e.path;
     return xs ? `<i${attrs}>${xs}</i>` : `<i${attrs}/>`;
   });
   return `<${tag} count="${out.length}">${out.join('')}</${tag}>`;
@@ -105,10 +113,11 @@ export function generateOpenXmlPivotParts(
   pivot: PivotTableDefinition,
   id: number,
   recordsRid: string,
-  styles?: StyleBuilder
+  styles?: StyleBuilder,
+  date1904 = false
 ): OpenXmlPivotParts {
-  const source = readSource(sourceSheet, pivot.sourceRange);
-  const layout = buildLayout(pivot, source);
+  const source = readSource(sourceSheet, pivot.sourceRange, { date1904 });
+  const layout = buildLayout(pivot, source, { date1904 });
   const { fields, records } = source;
   const axisSet = new Set([...layout.rowFields, ...layout.colFields, ...layout.pageFields.map((p) => p.field)]);
 
@@ -116,7 +125,7 @@ export function generateOpenXmlPivotParts(
   const cacheFields = fields
     .map((name, f) => {
       const numFmtId = isDateField(source, f) && styles ? styles.registerNumFmt(source.formats[f] ?? 14) : 0;
-      return `<cacheField name="${escapeAttr(name)}" numFmtId="${numFmtId}">${sharedItemsXml(source, f, axisSet.has(f) ? layout.shared.get(f) : undefined)}</cacheField>`;
+      return `<cacheField name="${escapeAttr(name)}" numFmtId="${numFmtId}">${sharedItemsXml(source, f, axisSet.has(f) ? layout.shared.get(f) : undefined, date1904)}</cacheField>`;
     })
     .join('');
   const cacheDefinitionXml =
@@ -128,7 +137,7 @@ export function generateOpenXmlPivotParts(
   const recordXml = records
     .map(
       (rec) =>
-        `<r>${rec.map((v, f) => (axisSet.has(f) ? `<x v="${layout.sharedIndex.get(f)!.get(itemKey(v))}"/>` : valueXml(v, dateFields[f]))).join('')}</r>`
+        `<r>${rec.map((v, f) => (axisSet.has(f) ? `<x v="${layout.sharedIndex.get(f)!.get(itemKey(v))}"/>` : valueXml(v, dateFields[f], date1904))).join('')}</r>`
     )
     .join('');
   const cacheRecordsXml = `${XML_HEADER}<pivotCacheRecords xmlns="${NS.main}" xmlns:r="${NS.r}" count="${records.length}">${recordXml}</pivotCacheRecords>`;

@@ -86,7 +86,8 @@ describe('files from ExcelJS', () => {
     expect(s.C3.f).toBe('B3*2');
     expect(s.A5.v).toBe('bold plain');
     expect(s.A5.richText?.[0]).toEqual({ text: 'bold', font: expect.objectContaining({ bold: true }) });
-    expect(s['!dataValidation']).toEqual([{ ref: 'B5', type: 'list', values: ['x', 'y'] }]);
+    // ExcelJS omits showErrorMessage/showInputMessage, whose schema default is false
+    expect(s['!dataValidation']).toEqual([{ ref: 'B5', type: 'list', values: ['x', 'y'], showErrorMessage: false, showInputMessage: false }]);
     expect(s['!condfmt']?.[0].rules[0]).toMatchObject({ type: 'cellIs', operator: 'greaterThan', formulae: [1], style: { font: { italic: true } } });
     expect(s['!freeze']).toMatchObject({ ySplit: 1 });
     expect(s['!tabColor']).toEqual({ rgb: '00FF00' });

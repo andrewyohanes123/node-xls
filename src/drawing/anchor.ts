@@ -56,16 +56,24 @@ function advance(start: number, startOff: number, length: number, sizeOf: (i: nu
   return [limit - 1, sizeOf(limit - 1)];
 }
 
+const inGrid = (a: CellAddress) => a.c >= 0 && a.c <= 16383 && a.r >= 0 && a.r <= 1048575;
+
 export function resolveAnchor(ws: WorkSheet, anchor: DrawingAnchor, natural?: { width: number; height: number }): ResolvedAnchor {
   const f = addr(anchor.from);
+  if (!inGrid(f)) throw new Error(`Drawing anchor ${JSON.stringify(anchor.from)} is outside the sheet`);
   const from: Marker = { col: f.c, colOff: anchor.offsetX ?? 0, row: f.r, rowOff: anchor.offsetY ?? 0 };
   if (anchor.to) {
     const t = addr(anchor.to);
-    let width = -from.colOff;
+    const to: Marker = { col: t.c, colOff: anchor.toOffsetX ?? 0, row: t.r, rowOff: anchor.toOffsetY ?? 0 };
+    if (!inGrid(t)) throw new Error(`Drawing anchor ${JSON.stringify(anchor.to)} is outside the sheet`);
+    if (to.col < from.col || to.row < from.row || (to.col === from.col && to.colOff < from.colOff) || (to.row === from.row && to.rowOff < from.rowOff)) {
+      throw new Error(`Drawing anchor "to" (${JSON.stringify(anchor.to)}) lies before "from" (${JSON.stringify(anchor.from)})`);
+    }
+    let width = to.colOff - from.colOff;
     for (let c = f.c; c < t.c; c++) width += columnWidthPx(ws, c);
-    let height = -from.rowOff;
+    let height = to.rowOff - from.rowOff;
     for (let r = f.r; r < t.r; r++) height += rowHeightPx(ws, r);
-    return { from, to: { col: t.c, colOff: 0, row: t.r, rowOff: 0 }, width: Math.max(1, width), height: Math.max(1, height) };
+    return { from, to, width: Math.max(1, width), height: Math.max(1, height) };
   }
   const width = Math.round(anchor.width ?? natural?.width ?? 480);
   const height = Math.round(anchor.height ?? natural?.height ?? 288);

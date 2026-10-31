@@ -5,8 +5,10 @@ import { encode_col, decode_col } from './address.js';
 
 // Order matters: literals and quoted names are matched (and skipped) first.
 // Tokens followed by '!' are sheet names (Sheet1!A1, JAN:DEC!B5), never references.
+// Names may contain any letter (\p{L}), digits, '_', '.', '\'; structured references escape
+// brackets and quotes with "'" (Table1[[#This Row],['[Qty']]]).
 const TOKEN =
-  /("(?:[^"]|"")*")|('(?:[^']|'')*')|(\[[^\]]*\])|(?<![A-Za-z0-9_.$])(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})(?![A-Za-z0-9_(!])|(?<![A-Za-z0-9_.$:])(\$?)(\d{1,7}):(\$?)(\d{1,7})(?![A-Za-z0-9_.(:!])|(?<![A-Za-z0-9_.])(\$?)([A-Z]{1,3})(\$?)([1-9]\d{0,6})(?![A-Za-z0-9_(.!])/g;
+  /("(?:[^"]|"")*")|('(?:[^']|'')*')|(\[(?:[^\]']|'.)*\])|(?<![\p{L}\p{N}_.$\\])(\$?)([A-Z]{1,3}):(\$?)([A-Z]{1,3})(?![\p{L}\p{N}_(!\\])|(?<![\p{L}\p{N}_.$:\\])(\$?)(\d{1,7}):(\$?)(\d{1,7})(?![\p{L}\p{N}_.(:!\\])|(?<![\p{L}\p{N}_.\\])(\$?)([A-Z]{1,3})(\$?)([1-9]\d{0,6})(?![\p{L}\p{N}_(.!\\])/gu;
 
 /**
  * Shifts the relative A1 references of a formula by (dr, dc), as Excel does

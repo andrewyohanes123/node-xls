@@ -11,6 +11,8 @@ export interface ParsedStyles {
   cellFormats: Array<string | undefined>;
   /** Differential formats used by conditional formatting. */
   dxfs: CFStyle[];
+  /** Number format codes by id (custom formats plus built-ins). */
+  numFmts: Record<number, string>;
 }
 
 export const styleParser = new XMLParser({
@@ -51,7 +53,7 @@ export function parseFontNode(fn: any): Font {
     if (val !== 'none') font.underline = !val || val === 'single' ? true : val;
   }
   if (fn.vertAlign?.['@_val'] && fn.vertAlign['@_val'] !== 'baseline') font.vertAlign = fn.vertAlign['@_val'];
-  const color = parseColorNode(fn.color);
+  const color = parseColorNode(Array.isArray(fn.color) ? fn.color[0] : fn.color);
   if (color) font.color = color;
   if (fn.family?.['@_val'] !== undefined) font.family = Number(fn.family['@_val']);
   if (fn.charset?.['@_val'] !== undefined) font.charset = Number(fn.charset['@_val']);
@@ -146,11 +148,13 @@ export function parseStyles(xml: string): ParsedStyles {
     const borderId = Number(xf['@_borderId'] ?? 0);
     const numFmtId = Number(xf['@_numFmtId'] ?? 0);
     if (fontId > 0 && fonts[fontId] && !isEmpty(fonts[fontId])) style.font = fonts[fontId];
-    if (fillId > 1 && fills[fillId] && fills[fillId].patternType && fills[fillId].patternType !== 'none') style.fill = fills[fillId];
+    // fill 1 is the reserved gray125 pattern; an xf may use it on purpose
+    if (fillId > 0 && fills[fillId] && fills[fillId].patternType && fills[fillId].patternType !== 'none') style.fill = fills[fillId];
     if (borderId > 0 && borders[borderId] && !isEmpty(borders[borderId])) style.border = borders[borderId];
     const fmt = numFmtId > 0 ? numFmts[numFmtId] : undefined;
     // ids such as 58 (CJK date) have no code in the file: keep the id, format via its equivalent
-    if (numFmtId > 0) style.numFmt = fmt ?? numFmtId;
+    // an undefined custom id (>= 164) cannot be written back; treat it as General
+    if (numFmtId > 0 && (fmt !== undefined || numFmtId < 164)) style.numFmt = fmt ?? numFmtId;
     const alignment = parseAlignment(xf.alignment);
     if (alignment) style.alignment = alignment;
     const protection = parseProtection(xf.protection);
@@ -168,7 +172,7 @@ export function parseStyles(xml: string): ParsedStyles {
     return s;
   });
 
-  return { cellStyles, cellFormats, dxfs };
+  return { cellStyles, cellFormats, dxfs, numFmts };
 }
 
 /** @deprecated use parseStyles */

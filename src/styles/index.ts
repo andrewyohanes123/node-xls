@@ -144,6 +144,21 @@ function protectionXml(p?: CellProtection): string {
   return a ? `<protection${a}/>` : '';
 }
 
+const MAX_CELL_FORMATS = 65430;
+
+/** Office value ranges for style properties. */
+function checkStyle(s: CellStyle): void {
+  const bad = (what: string, v: unknown) => {
+    throw new Error(`Invalid style: ${what} (got ${v})`);
+  };
+  if (s.font?.sz !== undefined && !(s.font.sz >= 1 && s.font.sz <= 409)) bad('font size must be 1-409', s.font.sz);
+  if (s.font?.family !== undefined && !(Number.isInteger(s.font.family) && s.font.family >= 0 && s.font.family <= 14)) bad('font family must be 0-14', s.font.family);
+  if (s.alignment?.indent !== undefined && !(Number.isInteger(s.alignment.indent) && s.alignment.indent >= 0 && s.alignment.indent <= 250)) bad('indent must be 0-250', s.alignment.indent);
+  const rot = s.alignment?.textRotation;
+  if (rot !== undefined && !(rot === 255 || (rot >= -90 && rot <= 180))) bad('textRotation must be -90..180 or 255', rot);
+  if (typeof s.numFmt === 'string' && s.numFmt.length > 255) bad('number format longer than 255 characters', s.numFmt.length);
+}
+
 class IndexedSet {
   readonly items: string[] = [];
   private map = new Map<string, number>();
@@ -226,6 +241,7 @@ export class StyleBuilder {
     const key = JSON.stringify(style);
     const cached = this.cache.get(key);
     if (cached !== undefined) return cached;
+    checkStyle(style);
 
     const fontId = this.registerFont(style.font);
     const fillId = this.registerFill(style.fill);
@@ -248,6 +264,8 @@ export class StyleBuilder {
       ['applyProtection', prot !== ''],
     ])}${align || prot ? `>${align}${prot}</xf>` : '/>'}`;
     const idx = this.cellXfs.add(xml);
+    // Excel's limit on distinct cell formats in a workbook
+    if (this.cellXfs.size > MAX_CELL_FORMATS) throw new Error(`More than ${MAX_CELL_FORMATS} distinct cell styles; Excel cannot open the workbook`);
     this.cache.set(key, idx);
     return idx;
   }

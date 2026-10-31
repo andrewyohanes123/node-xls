@@ -37,6 +37,7 @@ export function writeComments(ctx: WriteContext, entries: CommentEntry[], sheetP
         comments.length === 1
           ? String(comments[0].t ?? '')
           : comments.map((c) => (c.a ? `${c.a}:\n${c.t ?? ''}` : String(c.t ?? ''))).join('\n');
+      if (text.length > 32767) throw new Error(`Comment on ${ref}: text exceeds Excel's 32767 character limit`);
       // Excel writes note text as a run in its default note font (Tahoma 9).
       return `<comment ref="${ref}" authorId="${authorId(author)}"><text><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr>${textElement(
         text

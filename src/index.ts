@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as SSF from 'ssf';
+import { SSF } from './vendor/ssf.js';
 import { WorkBook, ParsingOptions, WritingOptions, BookType } from './types.js';
 import {
   encode_cell,
@@ -50,6 +50,10 @@ function toUint8Array(data: any, type?: string): Uint8Array {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   if (typeof data === 'string') {
+    if (type === 'file') {
+      const buf = fs.readFileSync(data);
+      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    }
     if (type === 'base64' || (!type && data.startsWith('UEsDB'))) {
       const buf = Buffer.from(data, 'base64');
       return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -66,7 +70,9 @@ function toUint8Array(data: any, type?: string): Uint8Array {
 }
 
 const isZip = (b: Uint8Array) => b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
-const looksLikeHtml = (text: string) => /^\s*(<!doctype html|<html|<table|<body)/i.test(text);
+/** HTML input: starts with markup (doctype, comment, html/head/body/meta/div/table...) and contains a table. */
+const looksLikeHtml = (text: string) =>
+  /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype\s+html|html|head|body|meta|title|style|div|table|section|main|article)\b/i.test(text) && /<table[\s>]/i.test(text);
 
 function readText(bytes: Uint8Array, opts?: ParsingOptions): WorkBook {
   const text = new TextDecoder('utf-8').decode(bytes);
@@ -91,10 +97,14 @@ export async function readFileAsync(filename: string, opts?: ParsingOptions): Pr
   return readAsync(await fs.promises.readFile(filename), opts);
 }
 
-function encodeText(text: string, type?: string): any {
-  if (type === 'buffer' || type === 'file') return Buffer.from(text, 'utf-8');
-  if (type === 'array') return new TextEncoder().encode(text);
-  if (type === 'base64') return Buffer.from(text, 'utf-8').toString('base64');
+/** Text output in the requested type; byte outputs of CSV/TXT get a UTF-8 BOM (as SheetJS) so Excel detects UTF-8. */
+function encodeText(text: string, type?: string, bom = false): any {
+  if (type === undefined || type === 'string') return text;
+  const bytes = Buffer.from((bom ? '\ufeff' : '') + text, 'utf-8');
+  if (type === 'buffer' || type === 'file') return bytes;
+  if (type === 'array') return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (type === 'base64') return bytes.toString('base64');
+  if (type === 'binary') return bytes.toString('latin1');
   return text;
 }
 
@@ -103,7 +113,7 @@ export function write(wb: WorkBook, opts?: WritingOptions): any {
   switch (bookType) {
     case 'csv':
     case 'txt':
-      return encodeText(writeCsv(wb, opts), opts?.type);
+      return encodeText(writeCsv(wb, opts), opts?.type, true);
     case 'html':
       return encodeText(writeHtml(wb, opts), opts?.type);
     case 'json': {
@@ -113,6 +123,7 @@ export function write(wb: WorkBook, opts?: WritingOptions): any {
     }
     case 'xlsx':
     case 'xlsm':
+      if (opts?.type === 'string') throw new Error(`'string' output type invalid for '${bookType}' files`);
       return convertOutputType(writeXlsxSync(wb, opts), opts?.type);
     default:
       throw new Error(`Unsupported bookType ${bookType}`);
@@ -216,6 +227,11 @@ const XLSX = {
   writeFile,
   writeFileXLSX,
   writeFileAsync,
+  // SheetJS aliases
+  readFileSync: readFile,
+  writeFileSync: writeFile,
+  writeXLSX: write,
+  set_fs: (_fs: unknown) => undefined,
   utils,
 };
 

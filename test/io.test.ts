@@ -75,7 +75,8 @@ describe('files', () => {
     expect(XLSX.readFile(path.join(dir, 'out.csv')).Sheets.Sheet1.A2.v).toBe('Pen, blue');
     expect(XLSX.readFile(path.join(dir, 'out.html')).Sheets.Sheet1.C2.v).toBe(1.5);
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'out.json'), 'utf8')).Items[0]).toEqual({ Name: 'Pen, blue', Qty: 3, Price: 1.5 });
-    expect(fs.readFileSync(path.join(dir, 'out.txt'), 'utf8').split('\n')[0]).toBe('Name\tQty\tPrice');
+    // byte output of CSV/TXT starts with a UTF-8 BOM so Excel detects the encoding (as SheetJS)
+    expect(fs.readFileSync(path.join(dir, 'out.txt'), 'utf8').split('\n')[0]).toBe('\ufeffName\tQty\tPrice');
   });
 
   it('rejects unsupported extensions instead of writing mislabeled files', () => {

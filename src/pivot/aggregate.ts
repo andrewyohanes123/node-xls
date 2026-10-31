@@ -1,25 +1,40 @@
 import { PivotSubtotal } from '../types.js';
-import { PivotValue } from './source.js';
+import { PivotError, PivotValue, isPivotError } from './source.js';
 
 /**
- * Excel's data-field summary functions. Returns null where Excel shows an
- * empty cell or #DIV/0! (no applicable values).
+ * Excel's data-field summary functions. Returns null where the pivot shows an
+ * empty cell (no applicable values, or #DIV/0! cases), and the first error
+ * value when an error takes part in a numeric summary (errors propagate).
  */
-export function aggregate(values: PivotValue[], fn: PivotSubtotal = 'sum'): number | null {
-  if (fn === 'count') return values.filter((v) => v !== null).length;
-  const nums = values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-  if (fn === 'countNums') return nums.length;
-  if (fn === 'sum') return nums.reduce((a, b) => a + b, 0);
-  if (nums.length === 0) return fn === 'max' || fn === 'min' || fn === 'product' ? 0 : null;
+export function aggregate(values: PivotValue[], fn: PivotSubtotal = 'sum'): number | null | PivotError {
+  if (fn === 'count') {
+    const n = values.filter((v) => v !== null).length;
+    return n === 0 ? null : n;
+  }
+  const nums: number[] = [];
+  for (const v of values) if (typeof v === 'number' && Number.isFinite(v)) nums.push(v);
+  if (fn === 'countNums') return nums.length === 0 ? null : nums.length;
+  const err = values.find(isPivotError);
+  if (err) return err;
   const n = nums.length;
-  const sum = nums.reduce((a, b) => a + b, 0);
+  if (n === 0) return null;
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const x of nums) {
+    sum += x;
+    if (x < min) min = x;
+    if (x > max) max = x;
+  }
   switch (fn) {
+    case 'sum':
+      return sum;
     case 'average':
       return sum / n;
     case 'max':
-      return Math.max(...nums);
+      return max;
     case 'min':
-      return Math.min(...nums);
+      return min;
     case 'product':
       return nums.reduce((a, b) => a * b, 1);
     case 'var':

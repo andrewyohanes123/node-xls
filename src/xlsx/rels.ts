@@ -31,8 +31,11 @@ export function readRels(files: Record<string, Uint8Array>, source: string): Map
   return out;
 }
 
+/** Relationship kind independent of Transitional/Strict spelling ("extended-properties" == "extendedProperties"). */
+const kindOf = (type: string) => type.slice(type.lastIndexOf('/') + 1).replace(/-/g, '').toLowerCase();
+
 export function findRel(rels: Map<string, Rel>, type: string): Rel | undefined {
-  const tail = type.split('/').pop();
-  for (const r of rels.values()) if (r.type === type || r.type.endsWith('/' + tail)) return r;
+  const kind = kindOf(type);
+  for (const r of rels.values()) if (r.type === type || kindOf(r.type) === kind) return r;
   return undefined;
 }

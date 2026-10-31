@@ -1,12 +1,12 @@
 # CLAUDE.md — node-xls contributor guide
 
-node-xls reads and writes `.xlsx` with a SheetJS CE–compatible API and adds what SheetJS sells as Pro: styles, rich text, conditional formatting, data validation, tables, images, charts and pivot tables. TypeScript, Node ≥ 18, runtime deps: `fflate` (zip), `fast-xml-parser` (reader), `ssf` (number formats).
+node-xls reads and writes `.xlsx` with a SheetJS CE–compatible API and adds what SheetJS sells as Pro: styles, rich text, conditional formatting, data validation, tables, images, charts and pivot tables. TypeScript, Node ≥ 18, runtime deps: `fflate` (zip), `fast-xml-parser` (reader). Number formatting is SheetJS CE's SSF, vendored in `src/vendor/ssf.ts` (Apache-2.0, `THIRD_PARTY_NOTICES.md`); the npm `ssf` 0.11.2 rounds times wrongly, so don't switch back to it.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `npm test` | Full vitest suite (~250 tests). Needs the XSDs from `npm run schemas` and `xmllint`. |
+| `npm test` | Full vitest suite (~360 tests). Needs the XSDs from `npm run schemas` and `xmllint`. |
 | `npm run test:tz` | Suite under UTC, Asia/Jakarta, America/New_York, Pacific/Kiritimati (date handling). |
 | `npm run schemas` | Downloads the ECMA-376 Transitional XSDs to `.cache/ecma/xsd` (gitignored). |
 | `npm run build` | Clean `dist/` and compile with `tsc` (CommonJS + .d.ts). |
@@ -50,6 +50,7 @@ src/pivot/
   parser.ts               pivot definitions back to PivotTableDefinition
 src/utils/                address, sheet utils (SheetJS semantics), book utils, dates, format (SSF), formula, units, table (HTML import)
 src/csv/                  CSV/TSV parse + CSV/HTML output
+src/vendor/ssf.ts         SheetJS SSF (vendored, @ts-nocheck); only touch it to sync with upstream
 test/helpers/validate.ts  the validation oracle (see Testing)
 scripts/                  showcase, render, inspect, excel-check, fetch-schemas, png encoder
 ```
@@ -74,7 +75,9 @@ scripts/                  showcase, render, inspect, excel-check, fetch-schemas,
 8. **Comments** need both `commentsN.xml` (text as `<r>` runs; ExcelJS ignores a bare `<t>`) and the legacy VML drawing.
 9. **Data validation `allowBlank`** defaults to false in the schema (absent = blanks not allowed).
 10. **Pivots:** shared items only for axis/page fields, records use `<x v>` for them; `pivotField` items are in display order, and `rowItems`/`colItems` index those items (not the shared items). More than one data field adds field `x="-2"` to `colFields`. `location` must equal header rows + item rows; page fields sit above `location`, so nothing may be rendered there. Data field names must not equal a source field name. Everything comes from `pivot/layout.ts`, so the renderer and the XML can't disagree.
-11. **Excel limits enforced on write:** 32,767 chars per cell, sheet names (31 chars, no `[]:*?/\`, not `History`, case-insensitive unique), inline list validation ≤ 255 chars, no overlapping merges/tables, grid XFD1048576.
+11. **Excel limits enforced on write** (README "Excel limits" has the full list): 32,767 chars per cell/comment, 8,192 per formula, sheet names (31 chars, no `[]:*?/\` or control chars, not `History`, case-insensitive unique), name grammar for defined/table names (`checkExcelName`), every range inside A1:XFD1048576 (`checkRangeInGrid`/`checkSqref`), outline levels ≤ 7, style value ranges and ≤ 65,430 cellXfs, DV error ≤ 224 chars, inline list ≤ 255 chars, no overlapping merges/tables/pivots. New features must throw rather than write values Excel rejects.
+12. **Rich-text runs** don't inherit on/off flags (bold, italic, …) from the cell font, only name/size/colour (`sst.ts`).
+13. **Number format ids 5–8, 27–36, 50–82 without a code** are locale-dependent; we resolve them through SSF's implicit table exactly as SheetJS does (`builtinFormatCode`).
 
 ## Testing rules
 
@@ -86,6 +89,7 @@ scripts/                  showcase, render, inspect, excel-check, fetch-schemas,
   It returns both parsed views, so you can assert on what an independent reader sees.
 - Assert features through an **independent reader** (ExcelJS for styles/CF/validation/images/tables, SheetJS CE for values/links/comments/names), not only through node-xls' own reader. The original tests only round-tripped through our own reader and missed every corruption bug.
 - `test/validator.test.ts` proves the oracle accepts SheetJS/ExcelJS output and rejects bad packages. Keep it green before trusting other failures.
+- `test/review-fixes.test.ts` and `test/review2.test.ts` hold the regression tests from the two independent reviews (numbered by finding). Each one was checked to fail on the code before its fix; keep it that way when adding to them.
 - Pivot tests use `checkPivotParts`, a consistency check across cache/records/table/location, as a stand-in for Excel's own load-time validation.
 - Date-related changes must pass `npm run test:tz`.
 - Visual changes: `npm run showcase && npm run render`, then look at the PNGs. Excel itself (not on Linux) is the final judge for pivots and charts; regenerate `npm run excel-check` and ask for a check.
@@ -101,4 +105,4 @@ scripts/                  showcase, render, inspect, excel-check, fetch-schemas,
 ## Known gaps / open items
 
 - Pivot tables and charts are validated against the schema, an internal consistency checker, ExcelJS and LibreOffice (which recomputes pivots identically), but have **not yet been confirmed in Microsoft Excel**. `out/excel-check/CHECKLIST.md` lists what to check. `pivot-8-ab-no-items.xlsx` is an A/B diagnostic in case Excel rejects the `rowItems`/`colItems`.
-- Not implemented: legacy formats (xls/xlsb/ods), encryption, formula evaluation, VBA, threaded comments, sparklines, combo/secondary-axis charts, compact/outline pivot layouts, calculated pivot fields, preserving unmodelled parts on round trip.
+- Not implemented: legacy formats (xls/xlsb/ods), encryption, formula evaluation, VBA, threaded comments, sparklines, combo/secondary-axis charts, compact/outline pivot layouts, calculated pivot fields, `XLSX.stream`, pictures inside group shapes (`xdr:grpSp`, dropped on read), preserving unmodelled parts on round trip.

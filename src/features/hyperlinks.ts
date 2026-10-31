@@ -24,9 +24,13 @@ export function encodeUriTarget(target: string): string {
  */
 export function hyperlinksXml(links: Array<{ ref: string; link: Hyperlink }>, pkg: PackageWriter, sheetPart: string): string {
   if (links.length === 0) return '';
+  // Office limits (MS-OI29500): 65,530 links per sheet, 255-character tooltips, 2,084-character targets
+  if (links.length > 65530) throw new Error(`Sheet has ${links.length} hyperlinks; Excel allows 65530`);
   const items = links.map(({ ref, link }) => {
     const target = String(link.Target ?? '');
     const internal = target.startsWith('#');
+    if (link.Tooltip !== undefined && String(link.Tooltip).length > 255) throw new Error(`Hyperlink ${ref}: tooltip longer than 255 characters`);
+    if (target.length > 2084) throw new Error(`Hyperlink ${ref}: target longer than 2084 characters`);
     const rid = internal ? undefined : pkg.addRel(sheetPart, REL_TYPES.hyperlink, encodeUriTarget(target), true);
     return `<hyperlink${attrs([
       ['ref', ref],

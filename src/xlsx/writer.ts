@@ -13,14 +13,22 @@ import { generateOpenXmlPivotParts } from '../pivot/openxml.js';
 
 export { SharedStringsBuilder } from './sst.js';
 
+/**
+ * Pivots from the sheets' '!pivots' and wb.PivotTables. A pivot is identified
+ * by target sheet + name (Excel requires unique names per sheet), so the same
+ * definition listed twice, or a cloned copy, is written once; the sheet's
+ * entry wins.
+ */
 function collectPivots(wb: WorkBook, names: string[]): PivotTableDefinition[] {
-  const out: PivotTableDefinition[] = [];
-  const add = (p: PivotTableDefinition) => {
-    if (p && !out.includes(p)) out.push(p);
+  const out = new Map<string, PivotTableDefinition>();
+  const add = (p: PivotTableDefinition, overwrite: boolean) => {
+    if (!p) return;
+    const key = `${p.targetSheet.toLowerCase()}\u0000${p.name.toLowerCase()}`;
+    if (overwrite || !out.has(key)) out.set(key, p);
   };
-  (wb.PivotTables ?? []).forEach(add);
-  for (const n of names) (wb.Sheets[n]?.['!pivots'] ?? []).forEach(add);
-  return out;
+  for (const n of names) (wb.Sheets[n]?.['!pivots'] ?? []).forEach((p) => add(p, true));
+  (wb.PivotTables ?? []).forEach((p) => add(p, false));
+  return [...out.values()];
 }
 
 export function buildXlsxArchiveFiles(wb: WorkBook, opts?: WritingOptions): Record<string, Uint8Array> {
@@ -52,7 +60,7 @@ export function buildXlsxArchiveFiles(wb: WorkBook, opts?: WritingOptions): Reco
   const caches: Array<{ id: number; rid: string }> = [];
   collectPivots(wb, names).forEach((pivot, i) => {
     const id = i + 1;
-    const source = wb.Sheets[pivot.sourceSheet];
+    const source = names.includes(pivot.sourceSheet) ? wb.Sheets[pivot.sourceSheet] : undefined;
     if (!source) throw new Error(`Pivot table ${pivot.name}: source sheet "${pivot.sourceSheet}" not found`);
     const target = names.indexOf(pivot.targetSheet);
     if (target === -1) throw new Error(`Pivot table ${pivot.name}: target sheet "${pivot.targetSheet}" not found`);
@@ -60,7 +68,7 @@ export function buildXlsxArchiveFiles(wb: WorkBook, opts?: WritingOptions): Reco
     const recordsPart = `xl/pivotCache/pivotCacheRecords${id}.xml`;
     const tablePart = `xl/pivotTables/pivotTable${id}.xml`;
     const recordsRid = pkg.addRel(cachePart, REL_TYPES.pivotCacheRecords, recordsPart);
-    const parts = generateOpenXmlPivotParts(source, pivot, id, recordsRid, ctx.styles);
+    const parts = generateOpenXmlPivotParts(source, pivot, id, recordsRid, ctx.styles, ctx.date1904);
     pkg.addPart(cachePart, parts.cacheDefinitionXml, CONTENT_TYPES.pivotCacheDefinition);
     pkg.addPart(recordsPart, parts.cacheRecordsXml, CONTENT_TYPES.pivotCacheRecords);
     pkg.addPart(tablePart, parts.pivotTableXml, CONTENT_TYPES.pivotTable);

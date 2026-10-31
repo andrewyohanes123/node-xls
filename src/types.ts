@@ -170,6 +170,8 @@ export interface CellObject {
   f?: string;
   /** Range of the enclosing array formula (on every cell of the array). */
   F?: string;
+  /** Dynamic-array formula flag (SheetJS); written as a legacy array formula. */
+  D?: boolean;
   /** Style. */
   s?: CellStyle;
   /** Comments / notes. */
@@ -395,6 +397,10 @@ export interface DataValidation {
   allowBlank?: boolean;
   /** Hide the in-cell dropdown arrow for lists. */
   hideDropDown?: boolean;
+  /** Show the error alert on invalid input (default true). */
+  showErrorMessage?: boolean;
+  /** Show the input prompt when the cell is selected (default true). */
+  showInputMessage?: boolean;
   prompt?: { title?: string; message: string };
   error?: { title?: string; message: string; style?: 'stop' | 'warning' | 'information' };
 }
@@ -425,8 +431,8 @@ export interface TableDefinition {
   /** Last row of `ref` is a totals row. */
   totalsRow?: boolean;
   columns?: TableColumn[];
-  /** Built-in table style, e.g. 'TableStyleMedium2' (default), 'TableStyleLight9'. */
-  style?: string;
+  /** Built-in table style, e.g. 'TableStyleMedium2' (default), 'TableStyleLight9'; null for no style. */
+  style?: string | null;
   /** Default true. */
   showRowStripes?: boolean;
   showColumnStripes?: boolean;
@@ -451,6 +457,9 @@ export interface DrawingAnchor {
   /** Pixel offsets inside the `from` cell. */
   offsetX?: number;
   offsetY?: number;
+  /** Pixel offsets inside the `to` cell (with `to`). */
+  toOffsetX?: number;
+  toOffsetY?: number;
 }
 
 export interface SheetImage {
@@ -537,8 +546,8 @@ export interface PivotDataField {
 
 export interface PivotFilter {
   field: string;
-  /** Single selected item (all items when omitted). */
-  selected?: string | number | boolean;
+  /** Single selected item (all items when omitted; null selects the "(blank)" item). Dates are serial numbers. */
+  selected?: string | number | boolean | null;
 }
 
 export interface PivotTableDefinition {
@@ -628,6 +637,8 @@ export interface WorkbookSheetProps {
 
 export interface WorkbookProtection {
   password?: string;
+  /** Legacy 16-bit password hash (hex), preserved from files that were read. */
+  passwordHash?: string;
   /** Existing password hash, preserved from files that were read. */
   algorithmName?: string;
   hashValue?: string;
@@ -665,6 +676,15 @@ export interface WritingOptions {
   cellStyles?: boolean;
   /** Sheet to export for single-sheet formats (csv/txt/html). Name or index. */
   sheet?: string | number;
+  /** CSV/TXT output options (as sheet_to_csv). */
+  FS?: string;
+  RS?: string;
+  strip?: boolean;
+  blankrows?: boolean;
+  forceQuotes?: boolean;
+  skipHidden?: boolean;
+  dateNF?: string;
+  rawNumbers?: boolean;
 }
 
 export interface ParsingOptions {
@@ -718,6 +738,8 @@ export interface Sheet2JSONOpts {
   blankrows?: boolean;
   skipHidden?: boolean;
   UTC?: boolean;
+  /** Interpret date serials in the 1904 system (set automatically for sheets read from 1904 workbooks). */
+  date1904?: boolean;
 }
 
 export interface Sheet2CSVOpts {

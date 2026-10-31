@@ -17,12 +17,13 @@ import {
   WorkBook,
   WorkSheet,
 } from '../types.js';
-import { decode_cell, decode_range, encode_cell, encode_range, parseSheetRef } from '../utils/address.js';
+import { decode_cell, decode_range, encode_cell, encode_range, intersectRange, parseSheetRef, wholeRangeRef } from '../utils/address.js';
+import { DATE1904 } from '../utils/sheet.js';
 import { parseStyles, parseFontNode, parseColorNode, ParsedStyles } from '../styles/parser.js';
 import { parsePivotTableXml } from '../pivot/parser.js';
-import { REL_TYPES, XML_READ_OPTIONS, decodeXstring, unescapeXml } from './xml.js';
+import { REL_TYPES, XML_READ_OPTIONS, decodeXstring, normalizeAttributeWhitespace, unescapeXml } from './xml.js';
 import { readRels, findRel, Rel } from './rels.js';
-import { ERROR_VALUES, format_cell, isDateFormat } from '../utils/format.js';
+import { ERROR_VALUES, builtinFormatCode, format_cell, isDateFormat } from '../utils/format.js';
 import { serialToDate, isoToSerial } from '../utils/dates.js';
 import { shiftFormula } from '../utils/formula.js';
 import { widthToChars, widthToPixels, pointsToPixels } from '../utils/units.js';
@@ -38,6 +39,7 @@ import { readDrawing } from '../drawing/read.js';
 /** Shared parser options; see XML_READ_OPTIONS. */
 const base = XML_READ_OPTIONS;
 
+const customParser = new XMLParser({ ...base, isArray: (n) => n === 'property' });
 const wbParser = new XMLParser({ ...base, isArray: (n) => n === 'sheet' || n === 'definedName' || n === 'workbookView' });
 const sstParser = new XMLParser({ ...base, isArray: (n) => n === 'si' || n === 'r' });
 const sheetParser = new XMLParser({
@@ -66,7 +68,7 @@ type Files = Record<string, Uint8Array>;
 
 function readText(files: Files, path: string): string | undefined {
   const bytes = files[path];
-  return bytes ? strFromU8(bytes) : undefined;
+  return bytes ? normalizeAttributeWhitespace(strFromU8(bytes)) : undefined;
 }
 
 const bool = (v: unknown) => v === '1' || v === 'true';
@@ -108,10 +110,11 @@ export function parseSharedStrings(xml: string): string[] {
   return (sstParser.parse(xml).sst?.si ?? []).map((si: any) => parseSi(si).text);
 }
 
+/** The `sheets` read option: names match case-insensitively, numbers are indexes (as SheetJS). */
 function sheetSelected(opts: ParsingOptions | undefined, name: string, index: number): boolean {
   if (opts?.sheets === undefined) return true;
   const list = Array.isArray(opts.sheets) ? opts.sheets : [opts.sheets];
-  return list.some((s) => s === name || s === index);
+  return list.some((s) => (typeof s === 'number' ? s === index : String(s).toLowerCase() === name.toLowerCase()));
 }
 
 interface SheetContext {
@@ -129,6 +132,8 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
   const root = sheetParser.parse(xml).worksheet ?? {};
   const rels = readRels(ctx.files, part);
   const ws: WorkSheet = {};
+  // lets sheet_to_json convert date serials in the 1904 system without polluting the sheet's keys
+  if (date1904) Object.defineProperty(ws, DATE1904, { value: true, enumerable: false, writable: true, configurable: true });
   const keepStyles = opts?.cellStyles !== false;
   const keepFormulas = opts?.cellFormula !== false;
   const keepFormats = opts?.cellNF !== false;
@@ -174,7 +179,7 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
     if (col['@_outlineLevel'] !== undefined && Number(col['@_outlineLevel']) > 0) p.level = Number(col['@_outlineLevel']);
     if (styleIdx > 0 && keepStyles && styles.cellStyles[styleIdx]) p.s = cloneStyle(styles.cellStyles[styleIdx]);
     if (!Object.keys(p).length) continue;
-    for (let c = min; c <= max; c++) cols[c - 1] = { ...p };
+    for (let c = min; c <= max; c++) cols[c - 1] = cloneStyle(p);
   }
   if (cols.length) ws['!cols'] = cols;
 
@@ -220,14 +225,14 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
           const item = sst[Number(raw)];
           cell.t = 's';
           cell.v = item?.text ?? '';
-          if (item?.runs) cell.richText = item.runs;
+          if (item?.runs) cell.richText = cloneStyle(item.runs);
           break;
         }
         case 'inlineStr': {
           const item = parseSi(c.is);
           cell.t = 's';
           cell.v = item.text;
-          if (item.runs) cell.richText = item.runs;
+          if (item.runs) cell.richText = cloneStyle(item.runs);
           break;
         }
         case 'str':
@@ -329,6 +334,7 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
   }
 
   const dim = root.dimension?.['@_ref'];
+  if (dim && sheetRows !== Infinity) ws['!fullref'] = dim;
   if (dim && sheetRows === Infinity) {
     try {
       const d = decode_range(dim);
@@ -374,7 +380,7 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
       p.algorithmName = sp['@_algorithmName'];
       p.hashValue = sp['@_hashValue'];
       p.saltValue = sp['@_saltValue'];
-      p.spinCount = Number(sp['@_spinCount']);
+      if (sp['@_spinCount'] !== undefined) p.spinCount = Number(sp['@_spinCount']);
     } else if (sp['@_password']) p.passwordHash = sp['@_password'];
     ws['!protect'] = p;
   }
@@ -395,12 +401,18 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
     if (h['@_location']) target = rel ? `${target}#${h['@_location']}` : `#${h['@_location']}`;
     if (!target) continue;
     const link = { Target: target, ...(h['@_tooltip'] ? { Tooltip: h['@_tooltip'] } : {}) };
-    const range = decode_range(h['@_ref']);
+    let range = decode_range(h['@_ref']);
+    // a link on whole columns/rows applies to the cells in use, not a million empty ones
+    if (wholeRangeRef(range)) {
+      const used = ws['!ref'] ? intersectRange(range, decode_range(ws['!ref'])) : undefined;
+      if (!used) continue;
+      range = used;
+    }
     for (let r = range.s.r; r <= range.e.r; r++) {
       for (let c = range.s.c; c <= range.e.c; c++) {
         const ref = encode_cell({ r, c });
         if (!ws[ref]) ws[ref] = { t: 'z' };
-        ws[ref].l = link;
+        ws[ref].l = { ...link };
       }
     }
   }
@@ -413,15 +425,14 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
       if (pm[`@_${k}`] !== undefined) ws['!margins'][k] = Number(pm[`@_${k}`]);
     }
   }
-  const ps = root.pageSetup;
-  if (ps) {
-    const setup: Record<string, any> = {};
-    if (ps['@_orientation'] && ps['@_orientation'] !== 'default') setup.orientation = ps['@_orientation'];
-    for (const k of ['paperSize', 'scale', 'fitToWidth', 'fitToHeight']) if (ps[`@_${k}`] !== undefined) setup[k] = Number(ps[`@_${k}`]);
-    const fit = root.sheetPr?.pageSetUpPr?.['@_fitToPage'];
-    if (fit !== undefined || setup.fitToWidth !== undefined || setup.fitToHeight !== undefined) setup.fitToPage = bool(fit);
-    if (Object.keys(setup).length) ws['!pageSetup'] = setup;
-  }
+  const ps = root.pageSetup ?? {};
+  const setup: Record<string, any> = {};
+  if (ps['@_orientation'] && ps['@_orientation'] !== 'default') setup.orientation = ps['@_orientation'];
+  for (const k of ['paperSize', 'scale', 'fitToWidth', 'fitToHeight']) if (ps[`@_${k}`] !== undefined) setup[k] = Number(ps[`@_${k}`]);
+  // fit-to-page lives in sheetPr and applies even without a <pageSetup> element
+  const fit = root.sheetPr?.pageSetUpPr?.['@_fitToPage'];
+  if (fit !== undefined || setup.fitToWidth !== undefined || setup.fitToHeight !== undefined) setup.fitToPage = bool(fit);
+  if (Object.keys(setup).length) ws['!pageSetup'] = setup;
 
   // related parts: comments, tables, drawings, pivots
   for (const [, rel] of rels) {
@@ -432,10 +443,10 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
       const vmlRel = [...rels.values()].find((r) => relKind(r.type) === 'vmlDrawing');
       const vml = vmlRel ? readText(ctx.files, vmlRel.target) : undefined;
       if (!xmlC) continue;
-      for (const [ref, { comment, visible }] of parseCommentsXml(xmlC, vml)) {
+      for (const [ref, { comments, visible }] of parseCommentsXml(xmlC, vml)) {
         if (!ws[ref]) ws[ref] = { t: 'z' };
         const list = (ws[ref].c ?? []) as Comments;
-        list.push(comment);
+        list.push(...comments);
         if (visible) list.hidden = false;
         else list.hidden = true;
         ws[ref].c = list;
@@ -450,7 +461,7 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
       const cacheRel = findRel(readRels(ctx.files, rel.target), REL_TYPES.pivotCacheDefinition);
       const cacheXml = cacheRel ? readText(ctx.files, cacheRel.target) : undefined;
       if (pivotXml && cacheXml) {
-        const def = parsePivotTableXml(pivotXml, cacheXml, sheetName);
+        const def = parsePivotTableXml(pivotXml, cacheXml, sheetName, (id) => styles.numFmts[id] ?? builtinFormatCode(id), date1904);
         (ws['!pivots'] ??= []).push(def);
         ctx.wb.PivotTables!.push(def);
       }
@@ -481,32 +492,36 @@ function parseWorksheet(ctx: SheetContext, sheetName: string, part: string): Wor
 function resolvePivotSources(wb: WorkBook) {
   const unresolved = new Set<object>();
   for (const p of wb.PivotTables ?? []) {
-    if (p.sourceSheet || !p.sourceName) continue;
-    const key = p.sourceName.toLowerCase();
-    let done = false;
-    for (const sheet of wb.SheetNames) {
-      const t = wb.Sheets[sheet]?.['!tables']?.find((x) => x.name.toLowerCase() === key);
-      if (t) {
-        p.sourceSheet = sheet;
-        p.sourceRange = decode_range(t.ref);
-        done = true;
-        break;
-      }
-    }
-    if (!done) {
-      const n = wb.Workbook?.Names?.find((x) => x.Name.toLowerCase() === key);
-      try {
-        const ref = n ? parseSheetRef(n.Ref) : undefined;
-        if (ref?.sheet && wb.Sheets[ref.sheet]) {
-          p.sourceSheet = ref.sheet;
-          p.sourceRange = ref.range;
-          done = true;
+    if (!p.sourceSheet && p.sourceName) {
+      const key = p.sourceName.toLowerCase();
+      // a table (by name or displayName); its totals row is not part of the source data
+      for (const sheet of wb.SheetNames) {
+        const t = wb.Sheets[sheet]?.['!tables']?.find((x) => x.name.toLowerCase() === key || x.displayName?.toLowerCase() === key);
+        if (t) {
+          const r = decode_range(t.ref);
+          if (t.totalsRow) r.e.r--;
+          p.sourceSheet = sheet;
+          p.sourceRange = r;
+          break;
         }
-      } catch {
-        /* unresolvable */
+      }
+      if (!p.sourceSheet) {
+        // a defined name: the workbook-level one wins over sheet-scoped ones
+        const names = (wb.Workbook?.Names ?? []).filter((x) => x.Name.toLowerCase() === key);
+        const n = names.find((x) => x.Sheet === undefined) ?? names[0];
+        try {
+          const ref = n ? parseSheetRef(n.Ref) : undefined;
+          if (ref?.sheet) {
+            p.sourceSheet = ref.sheet;
+            p.sourceRange = ref.range;
+          }
+        } catch {
+          /* not a plain reference (e.g. OFFSET()) */
+        }
       }
     }
-    if (!done) unresolved.add(p);
+    // external connections, consolidations and sources in other workbooks cannot be rebuilt here
+    if (!p.sourceSheet || !wb.SheetNames.includes(p.sourceSheet)) unresolved.add(p);
   }
   if (!unresolved.size) return;
   wb.PivotTables = wb.PivotTables!.filter((p) => !unresolved.has(p));
@@ -553,6 +568,25 @@ function parseDocProps(files: Files, wb: WorkBook, rootRels: Map<string, Rel>) {
     }
   }
   wb.Props = props;
+
+  const customRel = findRel(rootRels, REL_TYPES.customProps);
+  const custom = customRel ? readText(files, customRel.target) : undefined;
+  if (custom) {
+    const root = customParser.parse(custom).Properties ?? {};
+    const out: Record<string, any> = {};
+    for (const p of asArray<any>(root.property)) {
+      const name = p['@_name'];
+      if (!name) continue;
+      const [kind] = Object.keys(p).filter((k) => !k.startsWith('@_') && k !== '#text');
+      if (!kind) continue;
+      const text = textOf(p[kind]);
+      if (kind === 'bool') out[name] = text === 'true' || text === '1';
+      else if (/^(i[1248]|ui[1248]|int|uint|r4|r8|decimal)$/.test(kind)) out[name] = Number(text);
+      else if (kind === 'filetime' || kind === 'date') out[name] = new Date(text);
+      else out[name] = text;
+    }
+    wb.Custprops = out;
+  }
 }
 
 export function parseXlsxFromFiles(files: Files, opts?: ParsingOptions): WorkBook {
@@ -566,7 +600,7 @@ export function parseXlsxFromFiles(files: Files, opts?: ParsingOptions): WorkBoo
 
   const stylesRel = findRel(wbRels, REL_TYPES.styles);
   const stylesXml = stylesRel ? readText(files, stylesRel.target) : undefined;
-  const styles: ParsedStyles = stylesXml ? parseStyles(stylesXml) : { cellStyles: [], cellFormats: [], dxfs: [] };
+  const styles: ParsedStyles = stylesXml ? parseStyles(stylesXml) : { cellStyles: [], cellFormats: [], dxfs: [], numFmts: {} };
   const sstRel = findRel(wbRels, REL_TYPES.sharedStrings);
   const sstXml = sstRel ? readText(files, sstRel.target) : undefined;
   const sst: SharedString[] = sstXml ? (sstParser.parse(sstXml).sst?.si ?? []).map(parseSi) : [];
@@ -587,9 +621,11 @@ export function parseXlsxFromFiles(files: Files, opts?: ParsingOptions): WorkBoo
             algorithmName: wp['@_workbookAlgorithmName'],
             hashValue: wp['@_workbookHashValue'],
             saltValue: wp['@_workbookSaltValue'],
-            spinCount: Number(wp['@_workbookSpinCount']),
+            ...(wp['@_workbookSpinCount'] !== undefined ? { spinCount: Number(wp['@_workbookSpinCount']) } : {}),
           }
-        : {}),
+        : wp['@_workbookPassword']
+          ? { passwordHash: wp['@_workbookPassword'] }
+          : {}),
     };
   }
   for (const n of asArray<any>(wbRoot.definedNames?.definedName)) {
@@ -609,7 +645,8 @@ export function parseXlsxFromFiles(files: Files, opts?: ParsingOptions): WorkBoo
     const state = s['@_state'];
     wb.Workbook!.Sheets!.push({ name, Hidden: state === 'hidden' ? 1 : state === 'veryHidden' ? 2 : 0 });
     wb.SheetNames.push(name);
-    if (!rel || !files[rel.target] || !sheetSelected(opts, name, index)) {
+    if (!sheetSelected(opts, name, index)) return; // unselected sheets are left out (as SheetJS)
+    if (!rel || !files[rel.target]) {
       wb.Sheets[name] = {};
       return;
     }

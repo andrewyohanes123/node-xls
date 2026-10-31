@@ -81,6 +81,8 @@ export function workbookProtectionXml(p?: WorkbookProtection): string {
       ['workbookSaltValue', p.saltValue],
       ['workbookSpinCount', p.spinCount]
     );
+  } else if (p.passwordHash) {
+    list.push(['workbookPassword', p.passwordHash]);
   }
   list.push(['lockStructure', p.lockStructure !== false], ['lockWindows', p.lockWindows === true]);
   return `<workbookProtection${attrs(list)}/>`;

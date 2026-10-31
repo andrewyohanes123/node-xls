@@ -15,13 +15,16 @@ import {
   Comment,
   Comments,
 } from '../types.js';
-import { encode_cell, encode_col, encode_row, decode_cell, decode_range, encode_range, parse_range_spec } from './address.js';
+import { encode_cell, encode_col, encode_row, decode_cell, decode_range, encode_range, parse_range_spec, wholeRangeRef, intersectRange, normaliseMerges } from './address.js';
 import { escapeAttr, escapeXml } from '../xlsx/xml.js';
 import { dateToSerial, serialToDate, isValidDate } from './dates.js';
 import { DEFAULT_DATE_FORMAT, format_cell, formatValue, isDateFormat } from './format.js';
 import { styleToCss } from '../styles/css.js';
 
 export { format_cell } from './format.js';
+
+/** Non-enumerable marker the reader puts on sheets of 1904-date workbooks (used by sheet_to_json). */
+export const DATE1904 = '!date1904';
 
 function isPlainObject(v: unknown): v is Record<string, any> {
   return !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date);
@@ -88,6 +91,7 @@ export function sheet_add_aoa<T = any>(ws: WorkSheet, data: T[][], opts?: AOA2Sh
     range.s = { ...r.s };
     range.e = { ...r.e };
   }
+  let seen = false;
   for (let R = 0; R < data.length; R++) {
     const row = data[R];
     if (!row) continue;
@@ -101,11 +105,20 @@ export function sheet_add_aoa<T = any>(ws: WorkSheet, data: T[][], opts?: AOA2Sh
       if (range.s.c > c) range.s.c = c;
       if (range.e.r < r) range.e.r = r;
       if (range.e.c < c) range.e.c = c;
+      seen = true;
       const cell = create_cell(row[C], opts);
-      if (cell) target[encode_cell({ c, r })] = cell;
+      if (!cell) continue;
+      const ref = encode_cell({ c, r });
+      const prev = target[ref] as CellObject | undefined;
+      // filling a template keeps the existing number format (as SheetJS) and style
+      if (prev && cell !== row[C]) {
+        if (prev.z !== undefined) cell.z = prev.z;
+        if (prev.s !== undefined && cell.s === undefined) cell.s = prev.s;
+      }
+      target[ref] = cell;
     }
   }
-  target['!ref'] = encode_range(range);
+  if (seen || target['!ref']) target['!ref'] = encode_range(range);
   return target;
 }
 
@@ -186,10 +199,13 @@ function resolveJsonRange(ws: WorkSheet, range: Sheet2JSONOpts['range']): Range 
 export function sheet_to_json<T = any>(ws: WorkSheet, opts?: Sheet2JSONOpts): T[] {
   if (!ws || !ws['!ref']) return [];
   const o = opts ?? {};
-  const r = resolveJsonRange(ws, o.range);
+  let r = resolveJsonRange(ws, o.range);
+  if (wholeRangeRef(r)) r = intersectRange(r, decode_range(ws['!ref'])) ?? r;
+  const date1904 = o.date1904 ?? Boolean((ws as any)[DATE1904]);
   const header = o.header === 1 ? 1 : o.header === 'A' ? 2 : Array.isArray(o.header) ? 3 : 0;
   const offset = header > 0 ? 0 : 1;
-  const raw = o.raw ?? true;
+  // like SheetJS: raw defaults to true only when the option is absent
+  const raw = 'raw' in o ? Boolean(o.raw) : true;
   const colInfo = (o.skipHidden && ws['!cols']) || [];
   const rowInfo = (o.skipHidden && ws['!rows']) || [];
 
@@ -212,7 +228,9 @@ export function sheet_to_json<T = any>(ws: WorkSheet, opts?: Sheet2JSONOpts): T[
         break;
       default: {
         // styled blanks read from files are stub cells; treat them like missing cells (as SheetJS sees them)
-        const name = cell == null || (cell.t === 'z' && cell.v == null) ? '__EMPTY' : format_cell(cell, undefined, o);
+        // styled blanks read from files are stub cells SheetJS would not create: treat them as missing
+        const styledBlank = cell != null && cell.t === 'z' && cell.v === undefined && !cell.c && !cell.l;
+        const name = cell == null || styledBlank ? '__EMPTY' : format_cell(cell, undefined, o);
         let candidate = name;
         let counter = seen[name] || 0;
         if (!counter) seen[name] = 1;
@@ -238,7 +256,7 @@ export function sheet_to_json<T = any>(ws: WorkSheet, opts?: Sheet2JSONOpts): T[
       const cell = ws[cols[C] + encode_row(R)] as CellObject | undefined;
       const key = hdr[C];
       if (!cell || cell.t === undefined) {
-        if (o.defval !== undefined && key !== undefined) row[key] = o.defval;
+        if (o.defval !== undefined && key != null) row[key] = o.defval;
         continue;
       }
       let v: any = cell.v;
@@ -251,13 +269,13 @@ export function sheet_to_json<T = any>(ws: WorkSheet, opts?: Sheet2JSONOpts): T[
           break;
         case 'n':
           // like SheetJS, raw:false keeps the UTC-field date
-          if (cell.z !== undefined && isDateFormat(cell.z) && typeof v === 'number') v = serialToDate(v, { utc: o.UTC || o.raw === false });
+          if (cell.z !== undefined && isDateFormat(cell.z) && typeof v === 'number') v = serialToDate(v, { utc: o.UTC || o.raw === false, date1904 });
           break;
         case 'd':
           if (o.UTC && v instanceof Date) v = new Date(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate(), v.getHours(), v.getMinutes(), v.getSeconds(), v.getMilliseconds()));
           break;
       }
-      if (key === undefined) continue;
+      if (key == null) continue;
       if (v === null || v === undefined) {
         if (cell.t === 'e' && v === null) row[key] = null;
         else if (o.defval !== undefined) row[key] = o.defval;
@@ -333,7 +351,7 @@ export function sheet_to_html(ws: WorkSheet, opts?: Sheet2HTMLOpts): string {
   const foot = o.footer ?? '';
   if (!ws || !ws['!ref']) return `${head}<table${o.id ? ` id="${escapeAttr(o.id)}"` : ''}></table>${foot}`;
   const r = decode_range(ws['!ref']);
-  const merges = ws['!merges'] ?? [];
+  const merges = normaliseMerges(ws['!merges']);
   const covered = new Set<string>();
   const spans = new Map<string, { rowspan: number; colspan: number }>();
   for (const m of merges) {
@@ -488,7 +506,7 @@ export function cell_add_comment(cell: CellObject, text: string, author?: string
   cell.c.push({ t: text, a: author || 'SheetJS' });
 }
 
-export function sheet_set_array_formula(ws: WorkSheet, range: string | Range, formula: string): WorkSheet {
+export function sheet_set_array_formula(ws: WorkSheet, range: string | Range, formula: string, dynamic?: boolean): WorkSheet {
   const rng = typeof range === 'string' ? decode_range(range) : range;
   const ref = typeof range === 'string' ? range : encode_range(range);
   for (let R = rng.s.r; R <= rng.e.r; R++) {
@@ -497,7 +515,10 @@ export function sheet_set_array_formula(ws: WorkSheet, range: string | Range, fo
       cell.t = 'n';
       cell.F = ref;
       delete cell.v;
-      if (R === rng.s.r && C === rng.s.c) cell.f = formula;
+      if (R === rng.s.r && C === rng.s.c) {
+        cell.f = formula;
+        if (dynamic) cell.D = true;
+      }
       extendRef(ws, R, C);
     }
   }

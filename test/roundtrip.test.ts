@@ -73,9 +73,9 @@ describe('File System Operations & Multi-format Roundtrip', () => {
     const outCsvPath = path.join(tmpDir, 'out.csv');
     XLSX.writeFile(wb, outCsvPath, { bookType: 'csv' });
     const readOut = fs.readFileSync(outCsvPath, 'utf-8');
-    // SheetJS quotes a leading "ID" so Excel does not mistake the CSV for SYLK
-    expect(readOut).toContain('"ID",Name,Active');
-    expect(readOut).toContain('1,Alice,TRUE');
+    // SheetJS quotes a leading "ID" so Excel does not mistake the CSV for SYLK; imported values keep their source text
+    expect(readOut).toContain('\ufeff"ID",Name,Active');
+    expect(readOut).toContain('1,Alice,true');
   });
 
   it('should support async read and write', async () => {

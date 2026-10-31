@@ -7,7 +7,7 @@
  * <rowItems>/<colItems> and <location> always agree.
  */
 import { PivotSubtotal, PivotTableDefinition, Range } from '../types.js';
-import { SourceData, PivotValue } from './source.js';
+import { SourceData, PivotValue, PivotError, isPivotError } from './source.js';
 import { aggregate, defaultDataFieldName } from './aggregate.js';
 import { formatValue } from '../utils/format.js';
 
@@ -54,7 +54,8 @@ export interface PivotLayout {
   rowAxis: AxisEntry[];
   colAxis: AxisEntry[];
   /** values[rowEntry][colEntry]; null renders as an empty cell. */
-  values: Array<Array<number | null>>;
+  values: Array<Array<number | null | PivotError>>;
+  date1904: boolean;
   showSubtotals: boolean;
   geometry: PivotGeometry;
 }
@@ -62,27 +63,31 @@ export interface PivotLayout {
 /** Item identity: strings compare case-insensitively, as in Excel. */
 export function itemKey(v: PivotValue): string {
   if (v === null) return 'm';
+  if (isPivotError(v)) return `e:${v.error}`;
   if (typeof v === 'string') return `s:${v.toLowerCase()}`;
   return `${typeof v === 'number' ? 'n' : 'b'}:${v}`;
 }
 
-const typeRank = (v: PivotValue) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : typeof v === 'boolean' ? 2 : 3);
+const typeRank = (v: PivotValue) =>
+  typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : typeof v === 'boolean' ? 2 : isPivotError(v) ? 3 : 4;
 
-/** Excel's ascending item order: numbers, text, booleans, blanks. */
+/** Excel's ascending item order: numbers, text, booleans, errors, blanks. */
 export function compareValues(a: PivotValue, b: PivotValue): number {
   const d = typeRank(a) - typeRank(b);
   if (d) return d;
   if (typeof a === 'number') return a - (b as number);
   if (typeof a === 'string') return a.localeCompare(b as string, undefined, { sensitivity: 'base', numeric: true });
   if (typeof a === 'boolean') return Number(a) - Number(b);
+  if (isPivotError(a) && isPivotError(b)) return a.error.localeCompare(b.error);
   return 0;
 }
 
 /** Display label of an item (as Excel captions it). */
-export function itemLabel(source: SourceData, field: number, v: PivotValue): string {
+export function itemLabel(source: SourceData, field: number, v: PivotValue, date1904 = false): string {
   if (v === null) return '(blank)';
+  if (isPivotError(v)) return v.error;
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return formatValue(source.dateFields.has(field) ? (source.formats[field] ?? 14) : (source.formats[field] ?? 'General'), v);
+  if (typeof v === 'number') return formatValue(source.itemFormats[field]?.get(v) ?? 'General', v, { date1904 });
   return v;
 }
 
@@ -109,7 +114,7 @@ function axisEntries(root: Node, levels: number, subtotals: boolean, grand: bool
   return out;
 }
 
-export function buildLayout(def: PivotTableDefinition, source: SourceData): PivotLayout {
+export function buildLayout(def: PivotTableDefinition, source: SourceData, opts: { date1904?: boolean } = {}): PivotLayout {
   const where = `Pivot table "${def.name}"`;
   const fieldIndex = (name: string, role: string) => {
     const i = source.fields.findIndex((f) => f.toLowerCase() === String(name).toLowerCase());
@@ -161,7 +166,7 @@ export function buildLayout(def: PivotTableDefinition, source: SourceData): Pivo
     const field = pageIdx[i];
     if (flt.selected === undefined) return { field };
     const selected = displayIndex.get(field)!.get(itemKey(flt.selected as PivotValue));
-    if (selected === undefined) throw new Error(`${where}: filter value "${flt.selected}" not found in field "${flt.field}"`);
+    if (selected === undefined) throw new Error(`${where}: filter value "${flt.selected === null ? '(blank)' : flt.selected}" not found in field "${flt.field}"`);
     return { field, selected };
   });
 
@@ -263,5 +268,6 @@ export function buildLayout(def: PivotTableDefinition, source: SourceData): Pivo
     values: grid,
     showSubtotals,
     geometry,
+    date1904: Boolean(opts.date1904),
   };
 }

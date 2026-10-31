@@ -146,7 +146,10 @@ describe('review round 1: whole-column and whole-row ranges', () => {
     const back = XLSX.read(zipSync(files));
     expect(back.PivotTables![0].sourceRange).toEqual({ s: { c: 0, r: 0 }, e: { c: 1, r: 1048575 } });
     const again = await roundtrip(back);
-    expect(again.rep.xml('xl/pivotCache/pivotCacheDefinition1.xml')).toContain('recordCount="2"');
+    // whole-column sources also cover the empty rows below the data: one extra blank record, as Excel shows "(blank)"
+    const cache = again.rep.xml('xl/pivotCache/pivotCacheDefinition1.xml');
+    expect(cache).toContain('ref="A:B"');
+    expect(cache).toContain('recordCount="3"');
   });
 
   it('#7 conditional formatting on whole columns and rows', async () => {
@@ -228,7 +231,7 @@ describe('review round 1: writer fidelity', () => {
     ws['!tables'] = [{ name: 'NL', ref: 'A1:B2' }];
     const { rep, ws: back } = await roundtripSheet(ws);
     expect(back.A1.v).toBe('Line1\nLine2');
-    expect(rep.xml('xl/tables/table1.xml')).toContain('name="Line1_x000a_Line2"');
+    expect(rep.xml('xl/tables/table1.xml')).toContain('name="Line1_x000A_Line2"');
     expect(back['!tables']![0].columns![0].name).toBe('Line1\nLine2');
   });
 

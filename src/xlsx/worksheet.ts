@@ -19,7 +19,7 @@ import {
 import { WriteContext } from './context.js';
 import { attrs, encodeXstring, escapeAttr, escapeXml, num } from './xml.js';
 import { colorAttrs } from '../styles/index.js';
-import { decode_col, decode_cell, decode_range, encode_cell, encode_range, absoluteRef } from '../utils/address.js';
+import { decode_col, decode_cell, decode_range, encode_cell, encode_range, absoluteRef, checkFormula, checkRangeInGrid, checkSqref, normaliseMerges } from '../utils/address.js';
 import { dateToSerial, isValidDate, isoToSerial } from '../utils/dates.js';
 import { errorText } from '../utils/format.js';
 import { charsToWidth, pixelsToChars, pixelsToPoints } from '../utils/units.js';
@@ -96,6 +96,7 @@ function cellXml(ctx: WriteContext, ref: string, cell: CellObject): string | nul
   let formula: string | undefined;
   if (typeof cell.f === 'string' && cell.f.length > 0) {
     formula = cell.f.startsWith('=') ? cell.f.slice(1) : cell.f;
+    checkFormula(formula, `Cell ${ref}`);
     ctx.hasFormulas = true;
   }
   const fXml =
@@ -122,6 +123,8 @@ function cellXml(ctx: WriteContext, ref: string, cell: CellObject): string | nul
       type = 'str';
       vXml = `<v>${encodeXstring(s)}</v>`;
     } else if (cell.richText && cell.richText.length > 0) {
+      const total = cell.richText.reduce((n, r) => n + String(r.text ?? '').length, 0);
+      if (total > 32767) throw new Error(`Cell ${ref}: text exceeds Excel's 32767 character limit`);
       type = 's';
       vXml = `<v>${ctx.sst.getRichIndex(cell.richText, cell.s?.font)}</v>`;
     } else {
@@ -183,15 +186,22 @@ function colWidth(col: ColProperties): number | undefined {
   return undefined;
 }
 
+function checkLevel(level: number | undefined, what: string) {
+  if (level !== undefined && !(Number.isInteger(level) && level >= 0 && level <= 7)) throw new Error(`${what}: outline level must be 0-7 (got ${level})`);
+}
+
 function colsXml(ctx: WriteContext, cols: ColProperties[] | undefined): { xml: string; maxLevel: number } {
   if (!cols || cols.length === 0) return { xml: '', maxLevel: 0 };
+  if (cols.length > 16384) throw new Error(`!cols has ${cols.length} entries; Excel has 16384 columns`);
   let maxLevel = 0;
   const items: string[] = [];
   for (let i = 0; i < cols.length; i++) {
     const col = cols[i];
     if (!col) continue;
     const width = colWidth(col);
+    if (width !== undefined && !(width >= 0 && width <= 255)) throw new Error(`Column ${i + 1}: width must be 0-255 characters (got ${width})`);
     const level = col.level ?? col.outlineLevel;
+    checkLevel(level, `Column ${i + 1}`);
     const style = col.s ? ctx.styles.getStyleIndex(col.s) : 0;
     if (width === undefined && !col.hidden && !level && !style) continue;
     if (level) maxLevel = Math.max(maxLevel, level);
@@ -216,6 +226,8 @@ function rowAttrs(ctx: WriteContext, r: number, prop?: RowProperties): string {
     const style = prop.s ? ctx.styles.getStyleIndex(prop.s) : 0;
     const ht = prop.hpt ?? (prop.hpx !== undefined ? pixelsToPoints(prop.hpx) : undefined);
     const level = prop.level ?? prop.outlineLevel;
+    checkLevel(level, `Row ${r + 1}`);
+    if (ht !== undefined && !(ht >= 0 && ht <= 409)) throw new Error(`Row ${r + 1}: height must be 0-409 points (got ${ht})`);
     list.push(
       ['s', style || undefined],
       ['customFormat', style > 0],
@@ -249,6 +261,9 @@ function normaliseFreeze(f: string | FreezePane | undefined): Required<FreezePan
 
 function sheetViewsXml(ctx: WriteContext, ws: WorkSheet, index: number): string {
   const view = ws['!views'] ?? {};
+  if (view.zoomScale !== undefined && !(Number.isInteger(view.zoomScale) && view.zoomScale >= 10 && view.zoomScale <= 400)) {
+    throw new Error(`Sheet zoomScale must be 10-400 (got ${view.zoomScale})`);
+  }
   const rtl = view.rightToLeft ?? (index === 0 ? ctx.wb.Workbook?.Views?.[0]?.RTL : undefined);
   const freeze = normaliseFreeze(ws['!freeze']);
   let children = '';
@@ -278,8 +293,9 @@ function sheetViewsXml(ctx: WriteContext, ws: WorkSheet, index: number): string 
 
 function mergeCellsXml(merges: Range[] | undefined): string {
   if (!merges || merges.length === 0) return '';
-  // single-cell merges are no-ops that Excel may flag; drop them
-  const norm = merges.map((m) => (typeof m === 'string' ? decode_range(m) : m)).filter((m) => m.s.r !== m.e.r || m.s.c !== m.e.c);
+  // reversed ranges are normalised; single-cell merges are no-ops that Excel may flag, so they are dropped
+  const norm = normaliseMerges(merges);
+  for (const m of norm) checkRangeInGrid(m, `Merge ${encode_range(m)}`);
   if (norm.length === 0) return '';
   for (let i = 0; i < norm.length; i++) {
     for (let j = i + 1; j < norm.length; j++) {
@@ -359,6 +375,7 @@ export function writeWorksheet(ctx: WriteContext, sheetName: string, ws: WorkShe
   const rowProps = ws['!rows'] ?? [];
   const rowIndexes = new Set<number>(rows.keys());
   let maxRowLevel = 0;
+  if (rowProps.length > 1048576) throw new Error(`!rows has ${rowProps.length} entries; Excel has 1048576 rows`);
   rowProps.forEach((p, i) => {
     if (!p) return;
     const level = p.level ?? p.outlineLevel ?? 0;
@@ -390,6 +407,7 @@ export function writeWorksheet(ctx: WriteContext, sheetName: string, ws: WorkShe
 
   if (ws['!autofilter']?.ref) {
     const ref = String(ws['!autofilter'].ref).replace(/\$/g, '');
+    checkSqref(ref, 'Autofilter');
     sections.autoFilter = `<autoFilter ref="${escapeAttr(ref)}"/>`;
     ctx.autoNames.push({ name: '_xlnm._FilterDatabase', sheet: index, ref: absoluteRef(sheetName, decode_range(ref)) });
   }
@@ -404,6 +422,12 @@ export function writeWorksheet(ctx: WriteContext, sheetName: string, ws: WorkShe
   if (hl) sections.hyperlinks = hl;
 
   const mg = { ...DEFAULT_MARGINS, ...(ws['!margins'] ?? {}) };
+  for (const [k, v] of Object.entries(mg)) {
+    if (!(typeof v === 'number' && Number.isFinite(v) && v >= 0)) throw new Error(`Margin ${k} must be a non-negative number of inches (got ${v})`);
+  }
+  if (setup?.scale !== undefined && !(Number.isInteger(setup.scale) && setup.scale >= 10 && setup.scale <= 400)) {
+    throw new Error(`Page setup scale must be 10-400 (got ${setup.scale})`);
+  }
   sections.pageMargins = `<pageMargins${attrs([
     ['left', mg.left],
     ['right', mg.right],

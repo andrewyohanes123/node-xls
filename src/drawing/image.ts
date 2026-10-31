@@ -57,6 +57,8 @@ export function imageSize(b: Uint8Array, type: ImageType): { width: number; heig
     case 'bmp': {
       if (b.length < 26) return undefined;
       const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      // OS/2 BITMAPCOREHEADER (12 bytes) stores 16-bit sizes; later headers 32-bit
+      if (v.getUint32(14, true) === 12) return { width: v.getUint16(18, true), height: v.getUint16(20, true) };
       return { width: Math.abs(v.getInt32(18, true)), height: Math.abs(v.getInt32(22, true)) };
     }
     case 'jpeg': {

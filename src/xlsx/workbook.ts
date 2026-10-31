@@ -5,7 +5,7 @@
  */
 import { WorkBook } from '../types.js';
 import { WriteContext } from './context.js';
-import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, attrs, escapeXml } from './xml.js';
+import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, attrs, checkExcelName, escapeAttr, escapeXml } from './xml.js';
 import { workbookProtectionXml } from '../features/protection.js';
 
 const INVALID_SHEET_CHARS = /[\\/?*[\]:]/;
@@ -17,6 +17,8 @@ export function checkSheetName(name: string): void {
   if (name.startsWith("'") || name.endsWith("'")) throw new Error(`Sheet name cannot start or end with an apostrophe: "${name}"`);
   if (name.toLowerCase() === 'history') throw new Error("Sheet name cannot be 'History'");
   if (INVALID_SHEET_CHARS.test(name)) throw new Error(`Sheet name cannot contain : \\ / ? * [ ]: "${name}"`);
+  // control characters cannot be stored in XML and would be dropped silently
+  if (/[\u0000-\u001F\uFFFE\uFFFF]/.test(name)) throw new Error(`Sheet name cannot contain control characters: ${JSON.stringify(name)}`);
 }
 
 export function checkSheetNames(names: string[]): void {
@@ -60,9 +62,20 @@ export function buildWorkbookXml(ctx: WriteContext, sheets: SheetEntry[], pivotC
     .join('');
 
   const names: Array<{ name: string; sheet?: number; ref: string; hidden?: boolean; comment?: string }> = [];
+  const scopes = new Set<string>();
   for (const n of wb.Workbook?.Names ?? []) {
     if (!n || !n.Name || !n.Ref) continue;
-    names.push({ name: n.Name, sheet: n.Sheet ?? undefined, ref: String(n.Ref).replace(/^=/, ''), hidden: n.Hidden, comment: n.Comment });
+    // built-in names (_xlnm.Print_Area, ...) are reserved but valid
+    if (!/^_xlnm\./i.test(n.Name)) checkExcelName(n.Name, 'defined name');
+    if (n.Sheet !== undefined && n.Sheet !== null && !(Number.isInteger(n.Sheet) && n.Sheet >= 0 && n.Sheet < sheets.length)) {
+      throw new Error(`Defined name "${n.Name}": Sheet ${n.Sheet} is not a sheet index`);
+    }
+    const scope = `${n.Sheet ?? ''}\u0000${n.Name.toLowerCase()}`;
+    if (scopes.has(scope)) throw new Error(`Duplicate defined name "${n.Name}"${n.Sheet !== undefined ? ` on sheet ${n.Sheet}` : ''}`);
+    scopes.add(scope);
+    const ref = String(n.Ref).replace(/^=/, '');
+    if (ref.length > 8192) throw new Error(`Defined name "${n.Name}": formula longer than 8192 characters`);
+    names.push({ name: n.Name, sheet: n.Sheet ?? undefined, ref, hidden: n.Hidden, comment: n.Comment });
   }
   for (const a of ctx.autoNames) {
     if (!names.some((n) => n.name === a.name && n.sheet === a.sheet)) names.push({ name: a.name, sheet: a.sheet, ref: a.ref, hidden: true });
@@ -117,6 +130,27 @@ export function writeDocProps(ctx: WriteContext): void {
   ctx.pkg.addPart('docProps/app.xml', app, CONTENT_TYPES.extendedProps);
   ctx.pkg.addRel('', REL_TYPES.coreProps, 'docProps/core.xml');
   ctx.pkg.addRel('', REL_TYPES.extendedProps, 'docProps/app.xml');
+
+  // custom document properties (File > Properties > Custom)
+  const custom = Object.entries(ctx.wb.Custprops ?? {}).filter(([, v]) => v !== undefined && v !== null);
+  if (custom.length) {
+    const vt = (v: unknown) => {
+      if (typeof v === 'boolean') return `<vt:bool>${v}</vt:bool>`;
+      if (typeof v === 'number') return Number.isInteger(v) && Math.abs(v) < 2 ** 31 ? `<vt:i4>${v}</vt:i4>` : `<vt:r8>${v}</vt:r8>`;
+      if (v instanceof Date) return `<vt:filetime>${w3cdtf(v)}</vt:filetime>`;
+      return `<vt:lpwstr>${escapeXml(String(v))}</vt:lpwstr>`;
+    };
+    const items = custom.map(([name, v], i) => {
+      if (!name || name.length > 255) throw new Error(`Invalid custom property name "${name}"`);
+      return `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${i + 2}" name="${escapeAttr(name)}">${vt(v)}</property>`;
+    });
+    ctx.pkg.addPart(
+      'docProps/custom.xml',
+      `${XML_HEADER}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${items.join('')}</Properties>`,
+      CONTENT_TYPES.customProps
+    );
+    ctx.pkg.addRel('', REL_TYPES.customProps, 'docProps/custom.xml');
+  }
 }
 
 export function sheetVisibility(wb: WorkBook, i: number): 0 | 1 | 2 {

@@ -60,6 +60,9 @@ export function isValidDate(v: unknown): v is Date {
  * (any timezone suffix is ignored, as Excel does for t="d" cells).
  */
 export function isoToSerial(s: string, opts: DateOptions = {}): number | undefined {
+  // time-only values ("13:45:00.000", as SheetJS writes times with cellDates) are day fractions
+  const t = /^T?(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:Z|[+-]\d{2}:?\d{2})?$/.exec(s.trim());
+  if (t) return (+t[1] * 3600 + +t[2] * 60 + +(t[3] ?? 0) + Number(`0.${t[4] ?? 0}`)) / 86400;
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?/.exec(s.trim());
   if (!m) return undefined;
   const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0), Math.round(Number(`0.${m[7] ?? 0}`) * 1000));

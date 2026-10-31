@@ -31,6 +31,9 @@ export function textOf(node: any): string {
 }
 
 const bool = (v: any) => v === '1' || v === 'true';
+const isFalse = (v: any) => v === '0' || v === 'false';
+/** Plain-JSON copy so rules/cells never share mutable objects. */
+const clone = <T>(o: T): T => (o && typeof o === 'object' ? (JSON.parse(JSON.stringify(o)) as T) : o);
 const numOrString = (s: string): string | number => (s.trim() !== '' && Number.isFinite(Number(s)) ? Number(s) : s);
 const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
@@ -47,7 +50,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
     const ruleNodes = asArray<any>(cf.cfRule).sort((a, b) => Number(a['@_priority'] ?? 0) - Number(b['@_priority'] ?? 0));
     for (const r of ruleNodes) {
       const type = r['@_type'];
-      const style: CFStyle = r['@_dxfId'] !== undefined ? (dxfs[Number(r['@_dxfId'])] ?? {}) : {};
+      const style: CFStyle = r['@_dxfId'] !== undefined ? clone(dxfs[Number(r['@_dxfId'])] ?? {}) : {};
       const formulas = asArray(r.formula).map(textOf);
       const stop = {
         ...(bool(r['@_stopIfTrue']) ? { stopIfTrue: true } : {}),
@@ -65,7 +68,9 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
         case 'notContainsText':
         case 'beginsWith':
         case 'endsWith':
-          rules.push({ type, text: r['@_text'] ?? '', style, ...stop });
+          // without a text attribute the rule is defined by its formula alone
+          if (r['@_text'] === undefined) rules.push({ type: 'expression', formula: formulas[0] ?? 'FALSE', style, ...stop });
+          else rules.push({ type, text: r['@_text'], style, ...stop });
           break;
         case 'top10':
           rules.push({
@@ -80,7 +85,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
         case 'aboveAverage':
           rules.push({
             type,
-            ...(r['@_aboveAverage'] === '0' ? { below: true } : {}),
+            ...(isFalse(r['@_aboveAverage']) ? { below: true } : {}),
             ...(bool(r['@_equalAverage']) ? { equalAverage: true } : {}),
             ...(r['@_stdDev'] !== undefined ? { stdDev: Number(r['@_stdDev']) } : {}),
             style,
@@ -111,7 +116,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
             color: parseColorNode(asArray(db.color)[0]) ?? { rgb: '638EC6' },
             min: cfvo[0],
             max: cfvo[1],
-            ...(db['@_showValue'] === '0' ? { showValue: false } : {}),
+            ...(isFalse(db['@_showValue']) ? { showValue: false } : {}),
             ...prio,
           });
           break;
@@ -123,7 +128,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
             iconSet: is['@_iconSet'] ?? '3TrafficLights1',
             cfvo: asArray(is.cfvo).map(parseCfvo),
             ...(bool(is['@_reverse']) ? { reverse: true } : {}),
-            ...(is['@_showValue'] === '0' ? { showValue: false } : {}),
+            ...(isFalse(is['@_showValue']) ? { showValue: false } : {}),
             ...prio,
           });
           break;
@@ -159,6 +164,9 @@ export function parseDataValidations(nodes: any[]): DataValidation[] {
     // the schema default for allowBlank is false; node-xls defaults it to true
     if (!bool(n['@_allowBlank'])) dv.allowBlank = false;
     if (bool(n['@_showDropDown'])) dv.hideDropDown = true;
+    // both default to false in the schema
+    if (!bool(n['@_showErrorMessage'])) dv.showErrorMessage = false;
+    if (!bool(n['@_showInputMessage'])) dv.showInputMessage = false;
     if (n['@_prompt'] !== undefined || n['@_promptTitle'] !== undefined) {
       dv.prompt = { message: n['@_prompt'] ?? '', ...(n['@_promptTitle'] !== undefined ? { title: n['@_promptTitle'] } : {}) };
     }
@@ -189,6 +197,7 @@ export function parseTableXml(xml: string): TableDefinition {
   if (t['@_headerRowCount'] === '0') def.headerRow = false;
   if (Number(t['@_totalsRowCount'] ?? 0) > 0) def.totalsRow = true;
   if (si['@_name']) def.style = si['@_name'];
+  else if (t.tableStyleInfo) def.style = null; // explicitly unstyled
   if (si['@_showRowStripes'] !== undefined && !bool(si['@_showRowStripes'])) def.showRowStripes = false;
   if (bool(si['@_showColumnStripes'])) def.showColumnStripes = true;
   if (bool(si['@_showFirstColumn'])) def.showFirstColumn = true;
@@ -205,8 +214,8 @@ function richText(node: any): string {
     .join('');
 }
 
-/** Comments by cell ref. `visible` lists refs whose note is always shown (from VML). */
-export function parseCommentsXml(xml: string, vml?: string): Map<string, { comment: Comment; visible: boolean }> {
+/** Comments by cell ref (a cell may carry several <comment> elements). `visible` marks always-shown notes (from VML). */
+export function parseCommentsXml(xml: string, vml?: string): Map<string, { comments: Comment[]; visible: boolean }> {
   const root = featureParser.parse(xml).comments ?? {};
   const authors: string[] = asArray<any>(root.authors?.author).map(textOf);
   const visible = new Set<string>();
@@ -218,13 +227,15 @@ export function parseCommentsXml(xml: string, vml?: string): Map<string, { comme
       if (r && c) visible.add(`${r[1]},${c[1]}`);
     }
   }
-  const out = new Map<string, { comment: Comment; visible: boolean }>();
+  const out = new Map<string, { comments: Comment[]; visible: boolean }>();
   for (const c of asArray<any>(root.commentList?.comment)) {
     const ref = c['@_ref'];
     const author = authors[Number(c['@_authorId'] ?? 0)];
     const comment: Comment = { t: richText(c.text) };
     if (author !== undefined && author !== '') comment.a = author;
-    out.set(ref, { comment, visible: false });
+    const entry = out.get(ref);
+    if (entry) entry.comments.push(comment);
+    else out.set(ref, { comments: [comment], visible: false });
   }
   if (visible.size) {
     for (const [ref, entry] of out) {

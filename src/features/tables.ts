@@ -7,8 +7,8 @@
  */
 import { CellObject, Range, TableDefinition, TableTotalsFunction, WorkSheet } from '../types.js';
 import { WriteContext } from '../xlsx/context.js';
-import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, attrs, escapeXml } from '../xlsx/xml.js';
-import { decode_range, encode_cell, encode_range } from '../utils/address.js';
+import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, attrs, checkExcelName, escapeXml, xstringEncode } from '../xlsx/xml.js';
+import { decode_range, encode_cell, encode_range, normaliseMerges } from '../utils/address.js';
 import { format_cell } from '../utils/format.js';
 
 const SUBTOTAL_CODES: Record<Exclude<TableTotalsFunction, 'none' | 'custom'>, number> = {
@@ -22,7 +22,6 @@ const SUBTOTAL_CODES: Record<Exclude<TableTotalsFunction, 'none' | 'custom'>, nu
   var: 110,
 };
 
-const TABLE_NAME = /^[A-Za-z_\\][A-Za-z0-9_.\\]*$/;
 
 interface ResolvedTable {
   def: TableDefinition;
@@ -35,9 +34,8 @@ function escapeStructuredName(name: string): string {
 }
 
 function resolve(ws: WorkSheet, def: TableDefinition): ResolvedTable {
-  if (!TABLE_NAME.test(def.name) || /^[A-Za-z]{1,3}\d+$/.test(def.name) || /^[RrCc]\d*$/.test(def.name)) {
-    throw new Error(`Invalid table name "${def.name}": use letters, digits and underscores, starting with a letter`);
-  }
+  checkExcelName(def.name, 'table name');
+  if (def.displayName !== undefined) checkExcelName(def.displayName, 'table displayName');
   const range = decode_range(def.ref.replace(/\$/g, ''));
   const headerRow = def.headerRow !== false;
   const width = range.e.c - range.s.c + 1;
@@ -54,6 +52,7 @@ function resolve(ws: WorkSheet, def: TableDefinition): ResolvedTable {
       name = text.trim() === '' ? undefined : text;
     }
     const base = name ?? `Column${i + 1}`;
+    if (base.length > 255) throw new Error(`Table ${def.name}: column name longer than 255 characters`);
     let candidate = base;
     for (let n = 2; seen.has(candidate.toLowerCase()); n++) candidate = `${base}${n}`;
     seen.add(candidate.toLowerCase());
@@ -75,16 +74,20 @@ export function tableCellOverrides(ws: WorkSheet): Map<string, CellObject> {
       });
     }
     if (def.totalsRow) {
+      // structured references use the table's displayName (ECMA-376 18.5.1.2)
+      const tableRef = def.displayName ?? def.name;
       (def.columns ?? []).forEach((col, i) => {
         if (!col) return;
         const ref = encode_cell({ c: range.s.c + i, r: range.e.r });
         const cell = ws[ref] as CellObject | undefined;
+        // the cached value of the totals cell is kept; Excel recalculates on load
+        const keep = { ...(cell?.v !== undefined ? { v: cell.v } : {}), s: cell?.s, c: cell?.c, l: cell?.l };
         if (col.totalsRowFunction === 'custom') {
-          if (!col.totalsRowFormula) throw new Error(`Table ${def.name}: column ${names[i]} has totalsRowFunction "custom" but no totalsRowFormula`);
-          out.set(ref, { t: 'n', f: col.totalsRowFormula.replace(/^=/, ''), s: cell?.s, c: cell?.c, l: cell?.l });
+          // without a formula (as some writers emit) the existing cell is left as it is
+          if (col.totalsRowFormula) out.set(ref, { t: cell?.t ?? 'n', ...keep, f: col.totalsRowFormula.replace(/^=/, '') });
         } else if (col.totalsRowFunction && col.totalsRowFunction !== 'none') {
           const code = SUBTOTAL_CODES[col.totalsRowFunction];
-          out.set(ref, { t: 'n', f: `SUBTOTAL(${code},${def.name}[${escapeStructuredName(names[i])}])`, s: cell?.s, c: cell?.c, l: cell?.l });
+          out.set(ref, { t: cell?.t ?? 'n', ...keep, f: `SUBTOTAL(${code},${tableRef}[${escapeStructuredName(names[i])}])` });
         } else if (col.totalsRowLabel !== undefined && !cell) {
           out.set(ref, { t: 's', v: col.totalsRowLabel });
         }
@@ -105,14 +108,18 @@ export function writeTables(ctx: WriteContext, ws: WorkSheet, sheetName: string,
   const resolved = defs.map((d) => resolve(ws, d));
   const rids: string[] = [];
 
+  const definedNames = new Set((ctx.wb.Workbook?.Names ?? []).map((n) => n.Name.toLowerCase()));
   resolved.forEach((t, i) => {
-    const key = t.def.name.toLowerCase();
-    if (ctx.tableNames.has(key)) throw new Error(`Duplicate table name "${t.def.name}"`);
-    ctx.tableNames.add(key);
+    // names and display names share one namespace with each other and with defined names
+    for (const n of new Set([t.def.name, t.def.displayName ?? t.def.name].map((x) => x.toLowerCase()))) {
+      if (ctx.tableNames.has(n)) throw new Error(`Duplicate table name "${n}"`);
+      if (definedNames.has(n)) throw new Error(`Table name "${n}" is already used by a defined name`);
+      ctx.tableNames.add(n);
+    }
     for (let j = 0; j < i; j++) {
       if (overlaps(t.range, resolved[j].range)) throw new Error(`Tables ${t.def.name} and ${resolved[j].def.name} overlap on ${sheetName}`);
     }
-    for (const m of ws['!merges'] ?? []) {
+    for (const m of normaliseMerges(ws['!merges'])) {
       if (overlaps(t.range, m)) throw new Error(`Table ${t.def.name} overlaps merged cells ${encode_range(m)}`);
     }
     const af = ws['!autofilter']?.ref;
@@ -138,7 +145,7 @@ export function writeTables(ctx: WriteContext, ws: WorkSheet, sheetName: string,
         const a = attrs([
           ['id', i + 1],
           // column names are ST_Xstring: line breaks are stored as _x000a_ (as Excel does)
-          ['name', name.replace(/_(x[0-9A-Fa-f]{4}_)/g, '_x005F_$1').replace(/\n/g, '_x000a_').replace(/\r/g, '_x000d_')],
+          ['name', xstringEncode(name, { newlines: true })],
           ['totalsRowFunction', def.totalsRow ? fn : undefined],
           ['totalsRowLabel', def.totalsRow && !fn ? col?.totalsRowLabel : undefined],
         ]);
@@ -146,7 +153,7 @@ export function writeTables(ctx: WriteContext, ws: WorkSheet, sheetName: string,
       })
       .join('');
     const styleInfo = `<tableStyleInfo${attrs([
-      ['name', def.style ?? 'TableStyleMedium2'],
+      ['name', def.style === null ? undefined : (def.style ?? 'TableStyleMedium2')],
       ['showFirstColumn', def.showFirstColumn ? '1' : '0'],
       ['showLastColumn', def.showLastColumn ? '1' : '0'],
       ['showRowStripes', def.showRowStripes === false ? '0' : '1'],

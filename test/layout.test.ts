@@ -200,11 +200,14 @@ describe('workbook structure', () => {
   it('reads only selected sheets and limits rows', async () => {
     const big = utils.aoa_to_sheet(Array.from({ length: 50 }, (_, i) => [i]));
     const buf = XLSX.write(book(['A', big], ['B', grid()]), { type: 'array' });
-    const onlyB = XLSX.read(buf, { sheets: 'B' });
-    expect(Object.keys(onlyB.Sheets.A)).toEqual([]);
+    // like SheetJS: names match case-insensitively, unselected sheets are left out of Sheets
+    const onlyB = XLSX.read(buf, { sheets: 'b' });
+    expect(onlyB.SheetNames).toEqual(['A', 'B']);
+    expect(onlyB.Sheets.A).toBeUndefined();
     expect(onlyB.Sheets.B.A1.v).toBe('h1');
     const limited = XLSX.read(buf, { sheetRows: 10 });
     expect(limited.Sheets.A['!ref']).toBe('A1:A10');
+    expect(limited.Sheets.A['!fullref']).toBe('A1:A50');
     expect(limited.Sheets.A.A11).toBeUndefined();
   });
 });

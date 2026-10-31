@@ -287,7 +287,8 @@ describe('pivot layout and OpenXML', () => {
     const { cache } = checkPivotParts(rep);
     expect(cache).toMatch(/<cacheField name="When" numFmtId="14"><sharedItems containsSemiMixedTypes="0" containsNonDate="0" containsDate="1" containsString="0" minDate="2026-01-01T00:00:00" maxDate="2026-01-03T00:00:00" count="2"><d v="2026-01-02T00:00:00"\/><d v="2026-01-01T00:00:00"\/><\/sharedItems>/);
     expect(cache).toContain('<sharedItems containsBlank="1" count="2"><s v="ann"/><m/></sharedItems>');
-    expect(cache).toContain('<sharedItems containsSemiMixedTypes="0" containsString="0" count="2"><b v="1"/><b v="0"/></sharedItems>');
+    // MS-OI29500: booleans count as text for containsString / containsSemiMixedTypes
+    expect(cache).toContain('<sharedItems count="2"><b v="1"/><b v="0"/></sharedItems>');
     expect(grid(wb.Sheets.Pivot, 'A5:B7')).toEqual([
       ['1/1/26', 'ann'],
       ['1/2/26', 'ann'],
@@ -350,15 +351,17 @@ describe('pivot validation', () => {
     expect(() => utils.add_pivot_table(wb, { name: 'Clash', sourceSheet: 'Data', targetSheet: 'Pivot', targetCell: 'B4', rows: ['Region'], values: ['Qty'] })).toThrow(/overlaps pivot table PT/);
   });
 
-  it('duplicate or blank source headers are made unique', async () => {
+  it('duplicate headers are made unique (as Excel does); blank headers are rejected', async () => {
     const ws = utils.aoa_to_sheet([
-      ['K', 'K', null],
+      ['K', 'K', 'V '],
       ['a', 1, 2],
     ]);
     const wb = utils.book_new(ws, 'Data');
-    utils.add_pivot_table(wb, { sourceSheet: 'Data', rows: ['K'], values: ['K2', 'Column3'] });
+    utils.add_pivot_table(wb, { sourceSheet: 'Data', rows: ['K'], values: ['K2', 'V '] });
     const { rep } = await roundtrip(wb);
-    expect(rep.xml('xl/pivotCache/pivotCacheDefinition1.xml')).toMatch(/name="K".*name="K2".*name="Column3"/);
-    expect(() => XLSX.write(wb, { type: 'array' })).not.toThrow();
+    // cache field names are the exact header text (trailing space kept) so a refresh still finds them
+    expect(rep.xml('xl/pivotCache/pivotCacheDefinition1.xml')).toMatch(/name="K".*name="K2".*name="V "/);
+    const blank = utils.book_new(utils.aoa_to_sheet([['K', null], ['a', 1]]), 'Data');
+    expect(() => utils.add_pivot_table(blank, { sourceSheet: 'Data', rows: ['K'] })).toThrow(/header in column B is blank/);
   });
 });

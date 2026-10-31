@@ -53,15 +53,17 @@ export function computePivotData(dataRows: Array<Record<string, any>>, options: 
   );
 
   const keyOf = (r: Record<string, any>, fields: string[]) => fields.map((f) => normalise(r[f]));
-  const label = (v: PivotValue) => (v === null ? '' : String(v));
+  const label = (v: PivotValue) => (v === null ? '' : typeof v === 'object' ? v.error : String(v));
+  // items are case-insensitive (as in Excel): group by item key, label by first occurrence
+  const groupKey = (r: Record<string, any>, fields: string[]) => keyOf(r, fields).map(itemKey).join(SEP);
   const uniq = (fields: string[]) => {
     const map = new Map<string, PivotValue[]>();
     for (const r of records) {
-      const k = keyOf(r, fields);
-      map.set(k.map(itemKey).join(SEP), k);
+      const k = groupKey(r, fields);
+      if (!map.has(k)) map.set(k, keyOf(r, fields));
     }
     if (fields.length === 0) map.set('', []);
-    return [...map.values()].sort((a, b) => {
+    return [...map.entries()].sort(([, a], [, b]) => {
       for (let i = 0; i < a.length; i++) {
         const d = compareValues(a[i], b[i]);
         if (d) return d;
@@ -78,42 +80,44 @@ export function computePivotData(dataRows: Array<Record<string, any>>, options: 
     if (!g) groups.set(key, (g = []));
     g.push(r);
   };
-  const rk = (r: Record<string, any>) => keyOf(r, rows).map(label).join(SEP);
-  const ck = (r: Record<string, any>) => keyOf(r, cols).map(label).join(SEP);
   for (const r of records) {
-    push(`${rk(r)}\u0001${ck(r)}`, r);
-    push(`${rk(r)}\u0001*`, r);
-    push(`*\u0001${ck(r)}`, r);
+    const rk = groupKey(r, rows);
+    const ck = groupKey(r, cols);
+    push(`${rk}\u0001${ck}`, r);
+    push(`${rk}\u0001*`, r);
+    push(`*\u0001${ck}`, r);
   }
 
-  const agg = (list: Array<Record<string, any>> | undefined, df: PivotDataField) =>
-    aggregate(
+  const agg = (list: Array<Record<string, any>> | undefined, df: PivotDataField): number => {
+    const v = aggregate(
       (list ?? []).map((r) => normalise(r[df.field])),
       df.subtotal
-    ) ?? 0;
+    );
+    return v === null ? 0 : typeof v === 'number' ? v : NaN;
+  };
 
   const matrix: PivotSummary['matrix'] = {};
   const rowTotals: PivotSummary['rowTotals'] = {};
   const colTotals: PivotSummary['colTotals'] = {};
   const grandTotal: PivotSummary['grandTotal'] = {};
-  const rowLabels = rowKeys.map((k) => k.map(label));
-  const colLabels = colKeys.map((k) => k.map(label));
-  for (const r of rowLabels) {
-    const rs = r.join(SEP);
+  const rowLabels = rowKeys.map(([, k]) => k.map(label));
+  const colLabels = colKeys.map(([, k]) => k.map(label));
+  rowKeys.forEach(([rk], ri) => {
+    const rs = rowLabels[ri].join(SEP);
     matrix[rs] = {};
     rowTotals[rs] = {};
-    for (const c of colLabels) {
-      const cs = c.join(SEP);
+    colKeys.forEach(([ck], ci) => {
+      const cs = colLabels[ci].join(SEP);
       matrix[rs][cs] = {};
-      for (const df of dataFields) matrix[rs][cs][df.name!] = agg(groups.get(`${rs}\u0001${cs}`), df);
-    }
-    for (const df of dataFields) rowTotals[rs][df.name!] = agg(groups.get(`${rs}\u0001*`), df);
-  }
-  for (const c of colLabels) {
-    const cs = c.join(SEP);
+      for (const df of dataFields) matrix[rs][cs][df.name!] = agg(groups.get(`${rk}\u0001${ck}`), df);
+    });
+    for (const df of dataFields) rowTotals[rs][df.name!] = agg(groups.get(`${rk}\u0001*`), df);
+  });
+  colKeys.forEach(([ck], ci) => {
+    const cs = colLabels[ci].join(SEP);
     colTotals[cs] = {};
-    for (const df of dataFields) colTotals[cs][df.name!] = agg(groups.get(`*\u0001${cs}`), df);
-  }
+    for (const df of dataFields) colTotals[cs][df.name!] = agg(groups.get(`*\u0001${ck}`), df);
+  });
   for (const df of dataFields) grandTotal[df.name!] = agg(records, df);
 
   return { rowKeys: rowLabels, colKeys: colLabels, matrix, rowTotals, colTotals, grandTotal, dataFields };

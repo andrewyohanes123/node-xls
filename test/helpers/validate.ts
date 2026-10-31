@@ -33,6 +33,7 @@ const SCHEMA_BY_CONTENT_TYPE: Array<[RegExp, string]> = [
   [/drawingml\.chart\+xml$/, 'dml-chart.xsd'],
   [/officedocument\.drawing\+xml$/, 'dml-spreadsheetDrawing.xsd'],
   [/extended-properties\+xml$/, 'shared-documentPropertiesExtended.xsd'],
+  [/custom-properties\+xml$/, 'shared-documentPropertiesCustom.xsd'],
 ];
 
 const INVALID_SHEET_NAME = /[\\/?*[\]:]/;

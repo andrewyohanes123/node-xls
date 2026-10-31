@@ -7,7 +7,7 @@ import { encode_cell, encode_range } from './address.js';
 import { book_new, book_append_sheet } from './book.js';
 import { cssToStyle } from '../styles/css.js';
 import { ERROR_VALUES } from './format.js';
-import { parsePlainNumber } from '../csv/index.js';
+import { textToCell } from '../csv/index.js';
 
 export interface Table2SheetOpts {
   /** Keep every value as text (no number detection). */
@@ -76,10 +76,8 @@ export function table_to_sheet(table: string | any, opts?: Table2SheetOpts): Wor
       else if (t === 'd' && dv) Object.assign(cell, { t: 'd', v: new Date(dv) });
       else if (t === 's') Object.assign(cell, { t: 's', v: dv ?? text });
       else {
-        const trimmed = text.trim();
-        if (trimmed === '') Object.assign(cell, { t: 'z' });
-        else if (!opts?.raw && parsePlainNumber(trimmed) !== undefined) Object.assign(cell, { t: 'n', v: parsePlainNumber(trimmed) });
-        else Object.assign(cell, { t: 's', v: text.replace(/^\s+|\s+$/g, '') });
+        const typed = textToCell(text.replace(/^\s+|\s+$/g, ''), opts?.raw);
+        Object.assign(cell, typed ?? { t: 'z' });
       }
       if (a['data-z']) cell.z = a['data-z'];
       if (a.style && opts?.cellStyles !== false) {

@@ -39,6 +39,7 @@ export const REL_TYPES = {
   officeDocument: `${REL}/officeDocument`,
   coreProps: 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties',
   extendedProps: `${REL}/extended-properties`,
+  customProps: `${REL}/custom-properties`,
   worksheet: `${REL}/worksheet`,
   styles: `${REL}/styles`,
   sharedStrings: `${REL}/sharedStrings`,
@@ -67,6 +68,7 @@ export const CONTENT_TYPES = {
   theme: `${CT}.theme+xml`,
   coreProps: 'application/vnd.openxmlformats-package.core-properties+xml',
   extendedProps: `${CT}.extended-properties+xml`,
+  customProps: `${CT}.custom-properties+xml`,
   pivotTable: `${CT}.spreadsheetml.pivotTable+xml`,
   pivotCacheDefinition: `${CT}.spreadsheetml.pivotCacheDefinition+xml`,
   pivotCacheRecords: `${CT}.spreadsheetml.pivotCacheRecords+xml`,
@@ -103,14 +105,62 @@ export function escapeAttr(value: unknown): string {
     .replace(/\r/g, '&#13;');
 }
 
-/** Encodes SpreadsheetML text (ST_Xstring): control chars become `_xHHHH_`. */
-export function encodeXstring(value: unknown): string {
-  const s = String(value)
-    .replace(/_(x[0-9A-Fa-f]{4}_)/g, '_x005F_$1')
-    .replace(INVALID_XML_CHARS, (ch) => `_x${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`)
+/**
+ * ST_Xstring escaping without XML entity escaping: every underscore that
+ * starts a decodable `_xHHHH_` becomes `_x005F_` (overlapping sequences
+ * included), XML-illegal characters and CR become `_xHHHH_`. With
+ * `newlines`, LF/TAB are encoded too (for attribute values, where XML parsers
+ * would normalise them to spaces).
+ */
+export function xstringEncode(value: unknown, opts: { newlines?: boolean } = {}): string {
+  const hex = (ch: string) => `_x${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`;
+  let s = String(value)
+    .replace(/_(?=x[0-9A-Fa-f]{4}_)/g, '_x005F_')
+    .replace(INVALID_XML_CHARS, hex)
     // XML parsers normalise CR/CRLF to LF, so Excel stores CR escaped
     .replace(/\r/g, '_x000D_');
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (opts.newlines) s = s.replace(/[\n\t]/g, hex);
+  return s;
+}
+
+/** Encodes SpreadsheetML text (ST_Xstring) for a text node. */
+export function encodeXstring(value: unknown): string {
+  return xstringEncode(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Excel's rules for defined names, table names and table display names:
+ * 1-255 characters, starting with a letter, underscore or backslash, then
+ * letters, digits, underscores, periods or backslashes; no spaces; not a cell
+ * reference (A1 / R1C1 style) and not the single letters R or C.
+ */
+export function checkExcelName(name: string, what: string): void {
+  const bad = (why: string) => {
+    throw new Error(`Invalid ${what} "${name}": ${why}`);
+  };
+  if (typeof name !== 'string' || name.length === 0) bad('must not be empty');
+  if (name.length > 255) bad('longer than 255 characters');
+  if (!/^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u.test(name)) bad('use letters, digits, underscores, periods or backslashes, starting with a letter, underscore or backslash');
+  if (/^[rc]$/i.test(name)) bad('R and C are reserved');
+  const a1 = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(name);
+  if (a1) {
+    const col = a1[1].toUpperCase().split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+    if (col <= 16384 && Number(a1[2]) >= 1 && Number(a1[2]) <= 1048576) bad('looks like a cell reference');
+  }
+  if (/^r\d*c\d*$/i.test(name)) bad('looks like an R1C1 reference');
+}
+
+const TAG_RE = /<[A-Za-z_][^\s/>]*(?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*\/?>/g;
+
+/**
+ * XML 1.0 attribute-value normalisation (section 3.3.3): literal tab, LF and CR inside
+ * attribute values mean spaces (character references such as &#10; are kept).
+ * fast-xml-parser does not do this, so it is applied to the raw text first.
+ */
+export function normalizeAttributeWhitespace(xml: string): string {
+  const body = xml.indexOf('?>') === -1 ? xml : xml.slice(xml.indexOf('?>') + 2);
+  if (!/[\t\n\r]/.test(body)) return xml;
+  return xml.replace(TAG_RE, (tag) => (/[\t\n\r]/.test(tag) ? tag.replace(/[\t\n\r]/g, ' ') : tag));
 }
 
 /** Decodes the predefined XML entities and numeric character references. */

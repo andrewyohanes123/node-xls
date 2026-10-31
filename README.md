@@ -71,8 +71,9 @@ XLSX.writeFile(wb, 'report.xlsx');
 const wb = XLSX.readFile('in.xlsx', { cellDates: true });
 XLSX.writeFile(wb, 'out.xlsx');                       // format from extension: .xlsx .xlsm .csv .txt/.tsv .html .json
 
-const buf = XLSX.write(wb, { type: 'buffer' });       // 'buffer' | 'array' | 'base64' | 'binary' | 'string'
+const buf = XLSX.write(wb, { type: 'buffer' });       // 'buffer' | 'array' | 'base64' | 'binary' ('string' only for text formats)
 const wb2 = XLSX.read(buf);                            // Buffer, Uint8Array, ArrayBuffer, base64; CSV/HTML text too
+const wb3 = XLSX.read('in.xlsx', { type: 'file' });    // same as readFile
 
 await XLSX.writeFileAsync(wb, 'out.xlsx');            // async variants: readAsync, readFileAsync, writeAsync
 ```
@@ -83,11 +84,13 @@ await XLSX.writeFileAsync(wb, 'out.xlsx');            // async variants: readAsy
 | `cellStyles` | `true` | Populate `cell.s` |
 | `cellFormula` | `true` | Populate `cell.f` / `cell.F` (shared formulas are expanded) |
 | `cellNF` / `cellText` | `true` | Populate `cell.z` (number format) / `cell.w` (formatted text) |
-| `sheetRows` | – | Only read the first N rows |
-| `sheets` | – | Only parse these sheets (names or indexes) |
-| `raw`, `FS` | – | CSV: keep text as strings / field separator |
+| `sheetRows` | – | Only read the first N rows (`!fullref` keeps the full dimension) |
+| `sheets` | – | Only parse these sheets (names, case-insensitive, or indexes); the others are left out |
+| `raw`, `FS` | – | CSV: keep text as strings / field separator (otherwise detected, or taken from a `sep=` line) |
 
-Write options: `bookType` (`xlsx` `csv` `txt` `html` `json`), `type`, `compression` (default on), `sheet` (for single-sheet formats), `Props`.
+Write options: `bookType` (`xlsx` `xlsm` `csv` `txt` `html` `json`), `type`, `compression` (default on), `sheet` (for single-sheet formats), `Props`, and for CSV the `sheet_to_csv` options (`FS`, `RS`, `strip`, `blankrows`, `forceQuotes`). CSV/TXT written as bytes or files start with a UTF-8 BOM, as in SheetJS, so Excel detects the encoding.
+
+Document properties: `wb.Props` (Title, Author, Company, …) and custom properties `wb.Custprops` (`{ Project: 'Apollo', Build: 42 }`) are written and read.
 
 ### The data model
 
@@ -297,15 +300,31 @@ All SheetJS CE `utils` are available: `aoa_to_sheet`, `json_to_sheet`, `sheet_ad
 
 `sheet_to_html` writes cell styles as inline CSS and merges as `colspan`/`rowspan`. `table_to_sheet` reads them back.
 
+`XLSX.SSF` is SheetJS CE's own formatter, vendored in `src/vendor/ssf.ts` (Apache-2.0, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)), so `cell.w`, CSV and HTML text match SheetJS output. The `ssf` package on npm (0.11.2) is older and rounds times differently (`23:59:00` instead of `00:00:00`). The SheetJS top-level aliases `readFileSync`, `writeFileSync`, `writeXLSX` and `set_fs` exist too.
+
+## Excel limits
+
+Files Excel would reject or "repair" are refused at write time with an error that names the cell or setting:
+
+- cell text and comment text up to 32,767 characters; formulas (cells, conditional formats, validations, defined names) up to 8,192;
+- sheet names: 31 characters, none of `[]:*?/\`, no control characters, not `History`, unique ignoring case;
+- defined names, table names: Excel's name grammar (no cell-like names such as `B2`, no spaces), unique per scope;
+- every range inside `A1:XFD1048576`; merges, tables and pivots may not overlap (reversed merge ranges are normalised);
+- outline levels 0–7, column width ≤ 255, row height ≤ 409 pt, zoom and print scale 10–400 %, margins ≥ 0;
+- font size 1–409, indent 0–250, number formats ≤ 255 characters, at most 65,430 distinct cell styles;
+- data validation: inline lists ≤ 255 characters without commas, error message ≤ 224, prompt ≤ 255, titles ≤ 32;
+- hyperlinks: tooltip ≤ 255, target ≤ 2,084 characters, ≤ 65,530 per sheet.
+
 ## Differences from SheetJS CE
 
 - **Output formats:** only `.xlsx`/`.xlsm` (plus CSV/TSV/HTML/JSON) is written. Legacy formats (`.xls`, `.xlsb`, `.ods`, …) are rejected instead of being written with the wrong content. `.xlsm` gets the macro-enabled content type but no VBA project; macros in files that are read are not preserved.
-- **CSV/HTML import:** plain decimals (`1.50`, `-3`, `1e3`) become numbers, but codes with leading zeros (`007`), hex (`0x1F`) and thousands separators stay text. SheetJS converts all of them to numbers.
+- **CSV/HTML import:** plain decimals (`1.50`, `-3`, `1e3`) become numbers and keep their source text in `w`, so a CSV written back is unchanged. Codes with leading zeros (`007`), hex (`0x1F`), thousands separators, dates, percentages and currency stay text. SheetJS converts all of them.
 - **Whole-column ranges:** `decode_range('A:B')` spans rows 1–1,048,576. SheetJS returns `-1` rows.
 - **`t: 'd'` cells:** these hold real local `Date` objects. SheetJS stores UTC-shifted dates internally; `sheet_to_json` output matches either way.
 - **Sheet names:** duplicates are rejected case-insensitively, as Excel does.
 - **Defaults:** styles, formulas and number formats are read by default, and every cell gets a formatted `w`.
-- **Not supported yet:** dense sheet mode, streaming, file encryption, VBA, formula calculation, threaded comments, sparklines, combo charts, and round-trip preservation of parts node-xls does not model (SheetJS Pro "Edit").
+- **Rich text:** a run with a `font` is written with complete run properties: the cell's name, size and colour fill in what the run leaves out, but bold/italic/underline/strike are never inherited (Excel's rule; a plain run in a bold cell stays plain).
+- **Not supported yet:** dense sheet mode, streaming (`XLSX.stream`), file encryption, VBA, formula calculation, threaded comments, sparklines, combo charts, pictures inside grouped shapes (dropped on read), and round-trip preservation of parts node-xls does not model (SheetJS Pro "Edit").
 
 ---
 

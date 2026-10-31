@@ -4,7 +4,7 @@ import { XML_READ_OPTIONS } from '../xlsx/xml.js';
  */
 import { strFromU8 } from 'fflate';
 import { XMLParser } from 'fast-xml-parser';
-import { SheetImage, WorkSheet } from '../types.js';
+import { DrawingAnchor, SheetImage, WorkSheet } from '../types.js';
 import { encode_cell } from '../utils/address.js';
 import { EMU_PER_PIXEL } from '../utils/units.js';
 import { readRels } from '../xlsx/rels.js';
@@ -25,9 +25,17 @@ function marker(m: any) {
 export function readDrawing(files: Record<string, Uint8Array>, part: string, ws: WorkSheet): void {
   const bytes = files[part];
   if (!bytes) return;
-  const root = parser.parse(strFromU8(bytes)).wsDr ?? {};
+  const xml = strFromU8(bytes);
+  const root = parser.parse(xml).wsDr ?? {};
   const rels = readRels(files, part);
-  const anchors = [...(root.twoCellAnchor ?? []), ...(root.oneCellAnchor ?? [])];
+  // keep document (stacking) order across anchor kinds
+  const twos = [...(root.twoCellAnchor ?? [])];
+  const ones = [...(root.oneCellAnchor ?? [])];
+  const anchors: any[] = [];
+  for (const m of xml.matchAll(/<(?:[\w.-]+:)?(twoCellAnchor|oneCellAnchor)\b/g)) {
+    const next = m[1] === 'twoCellAnchor' ? twos.shift() : ones.shift();
+    if (next) anchors.push(next);
+  }
 
   for (const anchor of anchors) {
     const from = marker(anchor.from);
@@ -37,6 +45,14 @@ export function readDrawing(files: Record<string, Uint8Array>, part: string, ws:
       ...(from.dx ? { offsetX: from.dx } : {}),
       ...(from.dy ? { offsetY: from.dy } : {}),
     };
+    // size: the object's own extent if set (some writers leave it 0), else the anchor's
+    // "to" marker (with offsets), else a one-cell anchor's extent
+    const sizeOf = (ext: any): Partial<DrawingAnchor> => {
+      if (ext && Number(ext['@_cx']) > 0 && Number(ext['@_cy']) > 0) return { width: px(ext['@_cx']), height: px(ext['@_cy']) };
+      if (to) return { to: encode_cell({ c: to.c, r: to.r }), ...(to.dx ? { toOffsetX: to.dx } : {}), ...(to.dy ? { toOffsetY: to.dy } : {}) };
+      if (anchor.ext) return { width: px(anchor.ext['@_cx']), height: px(anchor.ext['@_cy']) };
+      return { to: encode_cell({ c: from.c + 1, r: from.r + 1 }) };
+    };
 
     for (const pic of anchor.pic ?? []) {
       const rid = pic.blipFill?.blip?.['@_embed'];
@@ -45,13 +61,7 @@ export function readDrawing(files: Record<string, Uint8Array>, part: string, ws:
       if (!data) continue;
       const type = detectImageType(data) ?? imageTypeFromExtension(rel!.target);
       if (!type) continue; // e.g. SVG-only pictures: not representable, skipped rather than breaking a re-write
-      const ext = pic.spPr?.xfrm?.ext;
-      const size = ext ? { width: px(ext['@_cx']), height: px(ext['@_cy']) } : anchor.ext ? { width: px(anchor.ext['@_cx']), height: px(anchor.ext['@_cy']) } : undefined;
-      const img: SheetImage = {
-        data,
-        type,
-        anchor: size ? { ...base, ...size } : { ...base, to: encode_cell({ c: to?.c ?? from.c + 1, r: to?.r ?? from.r + 1 }) },
-      };
+      const img: SheetImage = { data, type, anchor: { ...base, ...sizeOf(pic.spPr?.xfrm?.ext) } };
       const nv = pic.nvPicPr?.cNvPr;
       if (nv?.['@_name']) img.name = nv['@_name'];
       if (nv?.['@_descr']) img.description = nv['@_descr'];
@@ -62,13 +72,7 @@ export function readDrawing(files: Record<string, Uint8Array>, part: string, ws:
       const rid = frame.graphic?.graphicData?.chart?.['@_id'];
       const rel = rid ? rels.get(rid) : undefined;
       if (!rel || !rel.type.endsWith('/chart')) continue;
-      const xfrm = frame.xfrm?.ext;
-      const size = to
-        ? { to: encode_cell({ c: to.c, r: to.r }) }
-        : xfrm
-          ? { width: px(xfrm['@_cx']), height: px(xfrm['@_cy']) }
-          : {};
-      const chart = readChartPart(files, rel.target, { ...base, ...size });
+      const chart = readChartPart(files, rel.target, { ...base, ...sizeOf(frame.xfrm?.ext) });
       if (chart) {
         const name = frame.nvGraphicFramePr?.cNvPr?.['@_name'];
         if (name) chart.name = name;

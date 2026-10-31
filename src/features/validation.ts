@@ -6,6 +6,7 @@ import { DataValidation } from '../types.js';
 import { WriteContext } from '../xlsx/context.js';
 import { attrs, escapeXml } from '../xlsx/xml.js';
 import { dateToSerial } from '../utils/dates.js';
+import { checkFormula, checkSqref } from '../utils/address.js';
 
 function formulaOf(v: string | number | Date, ctx: WriteContext): string {
   if (v instanceof Date) return String(dateToSerial(v, { date1904: ctx.date1904 }));
@@ -35,6 +36,8 @@ export function dataValidationsXml(list: DataValidation[], ctx: WriteContext): s
       f1 = formulaOf(dv.formula1, ctx);
     }
     if (dv.formula2 !== undefined) f2 = formulaOf(dv.formula2, ctx);
+    checkSqref(dv.ref, 'Data validation');
+    for (const x of [f1, f2]) if (x !== undefined) checkFormula(x, `Data validation ${dv.ref}`);
     if (f1 === undefined && dv.type !== 'any') throw new Error(`Data validation of type ${dv.type} needs values or formula1`);
     const needsTwo = !['any', 'list', 'custom'].includes(dv.type) && (dv.operator ?? 'between').includes('etween');
     if (needsTwo && f2 === undefined) throw new Error(`Data validation operator ${dv.operator ?? 'between'} needs formula2`);
@@ -42,7 +45,8 @@ export function dataValidationsXml(list: DataValidation[], ctx: WriteContext): s
     checkLength('prompt title', dv.prompt?.title, 32);
     checkLength('prompt', dv.prompt?.message, 255);
     checkLength('error title', dv.error?.title, 32);
-    checkLength('error message', dv.error?.message, 255);
+    // MS-OI29500 18.3.1.32: Office limits the error message to 224 characters
+    checkLength('error message', dv.error?.message, 224);
 
     const a = attrs([
       ['type', dv.type === 'any' ? undefined : dv.type],
@@ -50,8 +54,8 @@ export function dataValidationsXml(list: DataValidation[], ctx: WriteContext): s
       ['operator', ['any', 'list', 'custom'].includes(dv.type) || !dv.operator || dv.operator === 'between' ? undefined : dv.operator],
       ['allowBlank', dv.allowBlank !== false],
       ['showDropDown', dv.type === 'list' && dv.hideDropDown === true],
-      ['showInputMessage', true],
-      ['showErrorMessage', true],
+      ['showInputMessage', dv.showInputMessage !== false],
+      ['showErrorMessage', dv.showErrorMessage !== false],
       ['errorTitle', dv.error?.title],
       ['error', dv.error?.message],
       ['promptTitle', dv.prompt?.title],
