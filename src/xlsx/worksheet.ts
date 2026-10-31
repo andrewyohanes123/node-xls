@@ -421,7 +421,7 @@ export function writeWorksheet(ctx: WriteContext, sheetName: string, ws: WorkShe
     if (ps) sections.pageSetup = `<pageSetup${ps}/>`;
   }
 
-  const drawing = writeDrawing(ctx, ws, part);
+  const drawing = writeDrawing(ctx, ws, sheetName, part);
   if (drawing) sections.drawing = drawing;
 
   if (comments.length) {

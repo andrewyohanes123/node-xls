@@ -6,6 +6,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import XLSX from '../dist/index.js';
+import { makePng } from './png.mjs';
 
 const { utils } = XLSX;
 const OUT = join('out', 'showcase');
@@ -324,6 +325,33 @@ section('10-protection', (wb) => {
   utils.book_append_sheet(wb, utils.aoa_to_sheet([['This sheet is hidden']]), 'Hidden');
   utils.book_set_sheet_visibility(wb, 'Hidden', 1);
   return null;
+});
+
+// ---------------------------------------------------------------------------
+section('11-images', () => {
+  // gradient "logo" with a circle, generated in memory
+  const logo = makePng(160, 80, (x, y) => {
+    const inCircle = (x - 40) ** 2 + (y - 40) ** 2 < 28 ** 2;
+    return inCircle ? [255, 255, 255, 255] : [31 + x / 2, 78 + y, 120 + x / 3, 255];
+  });
+  const stripes = makePng(60, 60, (x, y) => (((x + y) >> 3) % 2 ? [237, 125, 49, 255] : [255, 242, 204, 255]));
+  const jpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAACAAMDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AC9UAkf/2Q==', 'base64');
+  const ws = utils.aoa_to_sheet([
+    ['Images', null, null, null, null, 'Expected'],
+    [],
+    [null, null, null, null, null, 'B3: 160x80 gradient logo with white circle (natural size)'],
+    [null, null, null, null, null, 'B9: striped square stretched to B9:C14 (two-cell anchor)'],
+    [null, null, null, null, null, 'E9: blue JPEG scaled to 90x60 px, offset 10px'],
+  ]);
+  ws['!images'] = [
+    { data: logo, anchor: { from: 'B3' }, name: 'Logo', description: 'Generated gradient logo' },
+    { data: stripes, anchor: { from: 'B9', to: 'D15' } },
+    { data: jpeg, anchor: { from: 'E9', width: 90, height: 60, offsetX: 10, offsetY: 10 } },
+  ];
+  ws['!cols'] = [{ wch: 4 }, { wch: 12 }, { wch: 12 }, { wch: 4 }, { wch: 16 }, { wch: 52 }];
+  utils.set_cell_style(ws, 'A1', title);
+  utils.set_range_style(ws, 'F3:F5', note);
+  return ws;
 });
 
 // ---------------------------------------------------------------------------

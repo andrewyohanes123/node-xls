@@ -20,6 +20,8 @@ export interface WriteContext {
   hasFormulas: boolean;
   /** Hidden defined names generated while writing sheets (e.g. _xlnm._FilterDatabase). */
   autoNames: Array<{ name: string; sheet: number; ref: string }>;
+  /** Media parts by content hash (identical images are stored once). */
+  media: Map<string, string>;
 }
 
 export function createContext(wb: WorkBook, opts?: WritingOptions): WriteContext {
@@ -35,5 +37,6 @@ export function createContext(wb: WorkBook, opts?: WritingOptions): WriteContext
     tableNames: new Set(),
     hasFormulas: false,
     autoNames: [],
+    media: new Map(),
   };
 }

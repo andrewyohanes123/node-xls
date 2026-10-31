@@ -21,7 +21,7 @@ import { decode_cell, decode_range, encode_cell, encode_range } from '../utils/a
 import { parseStyles, parseFontNode, parseColorNode, ParsedStyles } from '../styles/parser.js';
 import { parsePivotTableXml } from '../pivot/parser.js';
 import { REL_TYPES, decodeXstring, unescapeXml } from './xml.js';
-import { resolveTarget, relsPathFor } from './package.js';
+import { readRels, findRel, Rel } from './rels.js';
 import { ERROR_VALUES, format_cell, isDateFormat } from '../utils/format.js';
 import { serialToDate, isoToSerial } from '../utils/dates.js';
 import { shiftFormula } from '../utils/formula.js';
@@ -37,7 +37,6 @@ import { readDrawing } from '../drawing/read.js';
 
 const base = { ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, trimValues: false } as const;
 
-const relsParser = new XMLParser({ ...base, isArray: (n) => n === 'Relationship' });
 const wbParser = new XMLParser({ ...base, isArray: (n) => n === 'sheet' || n === 'definedName' || n === 'workbookView' });
 const sstParser = new XMLParser({ ...base, isArray: (n) => n === 'si' || n === 'r' });
 const sheetParser = new XMLParser({
@@ -62,37 +61,11 @@ const sheetParser = new XMLParser({
     ].includes(n),
 });
 
-interface Rel {
-  type: string;
-  target: string;
-  external: boolean;
-}
-
 type Files = Record<string, Uint8Array>;
 
 function readText(files: Files, path: string): string | undefined {
   const bytes = files[path];
   return bytes ? strFromU8(bytes) : undefined;
-}
-
-function readRels(files: Files, source: string): Map<string, Rel> {
-  const out = new Map<string, Rel>();
-  const xml = readText(files, relsPathFor(source));
-  if (!xml) return out;
-  for (const r of relsParser.parse(xml).Relationships?.Relationship ?? []) {
-    const external = r['@_TargetMode'] === 'External';
-    out.set(r['@_Id'], {
-      type: r['@_Type'] ?? '',
-      target: external ? r['@_Target'] : resolveTarget(source, r['@_Target'] ?? ''),
-      external,
-    });
-  }
-  return out;
-}
-
-function findRel(rels: Map<string, Rel>, type: string): Rel | undefined {
-  for (const r of rels.values()) if (r.type === type || r.type.endsWith('/' + type.split('/').pop())) return r;
-  return undefined;
 }
 
 const bool = (v: unknown) => v === '1' || v === 'true';
