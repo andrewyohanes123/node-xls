@@ -82,8 +82,8 @@ describe('Basic SheetJS Compatibility', () => {
     const ws = utils.aoa_to_sheet(data);
     const html = utils.sheet_to_html(ws);
     expect(html).toContain('<table>');
-    expect(html).toContain('<td id="A1">A</td>');
-    expect(html).toContain('<td id="B2">2</td>');
+    expect(html).toContain('<td id="sjs-A1" data-t="s" data-v="A">A</td>');
+    expect(html).toContain('<td id="sjs-B2" data-t="n" data-v="2">2</td>');
   });
 
   it('should support formulas in sheet', () => {

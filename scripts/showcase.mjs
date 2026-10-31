@@ -121,7 +121,7 @@ section('03-numfmt-dates', () => {
     ['0.00%', 0.256, '25.60%'],
     ['0.00E+00', 1234.5678, '1.23E+03'],
     ['# ?/?', 1.25, '1 1/4'],
-    ['[Red]-0.00;[Blue]0.00', -5, '-5.00 in red'],
+    ['[Blue]0.00;[Red]-0.00', -5, '-5.00 in red'],
     ['yyyy-mm-dd', new Date(2026, 0, 15), '2026-01-15'],
     ['dd mmm yyyy', new Date(2026, 0, 15), '15 Jan 2026'],
     ['yyyy-mm-dd hh:mm', new Date(2026, 0, 15, 13, 45), '2026-01-15 13:45'],
@@ -159,9 +159,171 @@ section('04-layout', () => {
   ws['!cols'] = [{ wch: 18 }, { width: 10 }, { wpx: 80 }, { wch: 10 }, { wch: 10 }];
   ws['!rows'] = [{ hpt: 32 }];
   ws['!rows'][5] = { hidden: true };
+  ws['!freeze'] = 'B3';
+  ws['!tabColor'] = { theme: 5 };
+  ws['!views'] = { zoomScale: 110 };
+  ws['!margins'] = { left: 0.5, right: 0.5 };
+  ws['!pageSetup'] = { orientation: 'landscape', fitToWidth: 1, fitToHeight: 0 };
   utils.set_cell_style(ws, 'A1', { ...title, alignment: { horizontal: 'center', vertical: 'center' } });
   utils.set_range_style(ws, 'A2:E2', head);
   return ws;
+});
+
+// ---------------------------------------------------------------------------
+section('05-rich-text', () => {
+  const ws = utils.aoa_to_sheet([['Rich text runs inside single cells'], [], ['Example', 'Expected']]);
+  ws.A4 = {
+    t: 's',
+    richText: [
+      { text: 'Bold', font: { bold: true } },
+      { text: ' + ' },
+      { text: 'red italic', font: { italic: true, color: { rgb: 'C00000' } } },
+      { text: ' + ' },
+      { text: 'big', font: { sz: 16, name: 'Georgia' } },
+    ],
+  };
+  ws.B4 = { t: 's', v: 'Bold, red italic, big Georgia in one cell' };
+  ws.A5 = { t: 's', richText: [{ text: 'H' }, { text: '2', font: { vertAlign: 'subscript' } }, { text: 'O and x' }, { text: '2', font: { vertAlign: 'superscript' } }] };
+  ws.B5 = { t: 's', v: 'H₂O and x²' };
+  ws.A6 = { t: 's', richText: [{ text: 'underlined', font: { underline: true } }, { text: ' and ' }, { text: 'struck', font: { strike: true } }] };
+  ws.B6 = { t: 's', v: 'underline + strikethrough' };
+  ws['!ref'] = 'A1:B6';
+  ws['!cols'] = [{ wch: 40 }, { wch: 40 }];
+  utils.set_cell_style(ws, 'A1', title);
+  utils.set_range_style(ws, 'A3:B3', head);
+  utils.set_range_style(ws, 'B4:B6', note);
+  return ws;
+});
+
+// ---------------------------------------------------------------------------
+section('06-conditional', () => {
+  const rows = [['Rep', 'Q1', 'Q2', 'Q3', 'Q4', 'Status', 'Due']];
+  const names = ['Ann', 'Ben', 'Cat', 'Dan', 'Eve', 'Fay', 'Gus', 'Hal'];
+  names.forEach((n, i) => rows.push([n, 20 + ((i * 37) % 80), 10 + ((i * 53) % 90), 5 + ((i * 29) % 95), (i * 61) % 100, i % 3 ? 'ok' : 'late', new Date(2026, 0, 1 + i * 9)]));
+  const ws = utils.aoa_to_sheet(rows);
+  const last = rows.length;
+  ws['!condfmt'] = [
+    { ref: `B2:B${last}`, rules: [{ type: 'colorScale', cfvo: [{ type: 'min' }, { type: 'percentile', value: 50 }, { type: 'max' }], colors: [{ rgb: 'F8696B' }, { rgb: 'FFEB84' }, { rgb: '63BE7B' }] }] },
+    { ref: `C2:C${last}`, rules: [{ type: 'dataBar', color: { rgb: '638EC6' } }] },
+    { ref: `D2:D${last}`, rules: [{ type: 'iconSet', iconSet: '3TrafficLights1' }] },
+    { ref: `E2:E${last}`, rules: [{ type: 'cellIs', operator: 'greaterThan', formulae: [60], style: { font: { bold: true, color: { rgb: '9C0006' } }, fill: { fgColor: { rgb: 'FFC7CE' } } } }] },
+    { ref: `F2:F${last}`, rules: [{ type: 'containsText', text: 'late', style: { font: { color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: 'C00000' } } } }] },
+    { ref: `A2:G${last}`, rules: [{ type: 'expression', formula: '$E2<10', style: { font: { italic: true, strike: true } } }] },
+  ];
+  ws['!cols'] = [{ wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 12 }];
+  utils.set_range_style(ws, 'A1:G1', head);
+  utils.set_range_style(ws, `G2:G${last}`, { numFmt: 'dd mmm' });
+  return ws;
+});
+
+// ---------------------------------------------------------------------------
+section('07-validation', () => {
+  const ws = utils.aoa_to_sheet([
+    ['Field', 'Input (try it in Excel)', 'Rule'],
+    ['Status', 'Open', 'dropdown: Open / Closed / On hold'],
+    ['Quantity', 5, 'whole number 1..100 (stop alert)'],
+    ['Discount', 0.1, 'decimal <= 0.5 (warning alert)'],
+    ['Start date', new Date(2026, 0, 1), 'date >= 2026-01-01'],
+    ['Code', 'AB12', 'text length exactly 4'],
+    ['Owner', 'Ann', 'dropdown from range E2:E4'],
+    ['Note', '', 'input prompt only'],
+  ]);
+  ws.E1 = { t: 's', v: 'Owners' };
+  ws.E2 = { t: 's', v: 'Ann' };
+  ws.E3 = { t: 's', v: 'Ben' };
+  ws.E4 = { t: 's', v: 'Cat' };
+  ws['!ref'] = 'A1:E8';
+  ws['!dataValidation'] = [
+    { ref: 'B2', type: 'list', values: ['Open', 'Closed', 'On hold'], prompt: { title: 'Status', message: 'Pick a status' } },
+    { ref: 'B3', type: 'whole', operator: 'between', formula1: 1, formula2: 100, error: { title: 'Invalid', message: 'Enter 1 to 100' } },
+    { ref: 'B4', type: 'decimal', operator: 'lessThanOrEqual', formula1: 0.5, error: { message: 'Max 50%', style: 'warning' } },
+    { ref: 'B5', type: 'date', operator: 'greaterThanOrEqual', formula1: new Date(2026, 0, 1) },
+    { ref: 'B6', type: 'textLength', operator: 'equal', formula1: 4 },
+    { ref: 'B7', type: 'list', formula1: '$E$2:$E$4' },
+    { ref: 'B8', type: 'any', prompt: { title: 'Note', message: 'Free text' } },
+  ];
+  ws['!cols'] = [{ wch: 12 }, { wch: 24 }, { wch: 36 }, { wch: 2 }, { wch: 10 }];
+  ws.B4.z = '0%';
+  ws.B5.z = 'yyyy-mm-dd';
+  utils.set_range_style(ws, 'A1:C1', head);
+  utils.set_cell_style(ws, 'E1', head);
+  utils.set_range_style(ws, 'B2:B8', { fill: { fgColor: { rgb: 'FFF2CC' } }, protection: { locked: false } });
+  utils.set_range_style(ws, 'C2:C8', note);
+  return ws;
+});
+
+// ---------------------------------------------------------------------------
+section('08-tables', () => {
+  const ws = utils.aoa_to_sheet([
+    ['Product', 'Region', 'Units', 'Revenue'],
+    ['Chair', 'East', 12, 1440],
+    ['Desk', 'West', 4, 1200],
+    ['Lamp', 'East', 30, 750],
+    ['Shelf', 'North', 7, 630],
+    [null, null, null, null],
+  ]);
+  ws['!tables'] = [
+    {
+      name: 'SalesTable',
+      ref: 'A1:D6',
+      style: 'TableStyleMedium9',
+      totalsRow: true,
+      columns: [{ totalsRowLabel: 'Total' }, {}, { totalsRowFunction: 'sum' }, { totalsRowFunction: 'sum' }],
+    },
+  ];
+  utils.set_range_style(ws, 'D2:D6', { numFmt: '$#,##0' });
+  ws['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 }];
+  return ws;
+});
+
+// ---------------------------------------------------------------------------
+section('09-links-comments', (wb) => {
+  const ws = utils.aoa_to_sheet([
+    ['Kind', 'Cell', 'Expected'],
+    ['External URL', 'example.com', 'click opens https://example.com'],
+    ['Email', 'Write us', 'mailto link'],
+    ['Internal', 'Go to Target!B2', 'jumps to sheet Target'],
+    ['Note (hidden)', 'hover me', 'red triangle; note shows on hover'],
+    ['Note (visible)', 'always shown', 'note box always visible'],
+  ]);
+  const linkStyle = { font: { color: { theme: 10 }, underline: true } };
+  ws.B2.l = { Target: 'https://example.com', Tooltip: 'Example site' };
+  ws.B3.l = { Target: 'mailto:hello@example.com' };
+  ws.B4.l = { Target: '#Target!B2' };
+  ['B2', 'B3', 'B4'].forEach((r) => utils.set_cell_style(ws, r, linkStyle));
+  utils.cell_add_comment(ws.B5, 'Hidden note: hover to see me.', 'node-xls');
+  utils.cell_add_comment(ws.B6, 'Visible note', 'node-xls');
+  ws.B6.c.hidden = false;
+  ws['!cols'] = [{ wch: 16 }, { wch: 18 }, { wch: 36 }];
+  utils.set_range_style(ws, 'A1:C1', head);
+  utils.set_range_style(ws, 'C2:C6', note);
+  utils.book_append_sheet(wb, ws, 'Links');
+  const target = utils.aoa_to_sheet([[], [null, 'You arrived at Target!B2']]);
+  utils.set_cell_style(target, 'B2', { fill: { fgColor: { rgb: 'C6EFCE' } } });
+  utils.book_append_sheet(wb, target, 'Target');
+  return null;
+});
+
+// ---------------------------------------------------------------------------
+section('10-protection', (wb) => {
+  const ws = utils.aoa_to_sheet([
+    ['Protected sheet (password: node-xls)'],
+    ['Locked', 'cannot edit'],
+    ['Unlocked', 'you can edit this cell'],
+    ['Hidden formula', null],
+  ]);
+  ws.B4 = { t: 'n', f: 'LEN(B3)' };
+  ws['!ref'] = 'A1:B4';
+  ws['!protect'] = { password: 'node-xls', selectLockedCells: false, formatColumns: false };
+  utils.set_cell_style(ws, 'B3', { protection: { locked: false }, fill: { fgColor: { rgb: 'FFF2CC' } } });
+  utils.set_cell_style(ws, 'B4', { protection: { hidden: true } });
+  utils.set_cell_style(ws, 'A1', title);
+  ws['!cols'] = [{ wch: 16 }, { wch: 28 }];
+  utils.book_append_sheet(wb, ws, 'Protected');
+  wb.Workbook = { ...(wb.Workbook ?? {}), Protection: { password: 'node-xls' } };
+  utils.book_append_sheet(wb, utils.aoa_to_sheet([['This sheet is hidden']]), 'Hidden');
+  utils.book_set_sheet_visibility(wb, 'Hidden', 1);
+  return null;
 });
 
 // ---------------------------------------------------------------------------

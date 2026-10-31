@@ -1,6 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
-import { PivotTableDefinition, Range, CellAddress, PivotDataField, PivotSubtotal } from '../types.js';
-import { decode_range, decode_cell } from '../utils/address.js';
+import { PivotTableDefinition, CellAddress, PivotDataField, PivotSubtotal, PivotFilter } from '../types.js';
+import { decode_range } from '../utils/address.js';
 
 export function parsePivotTableXml(
   pivotXml: string,
@@ -10,6 +10,8 @@ export function parsePivotTableXml(
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
+    parseTagValue: false,
+    trimValues: false,
     isArray: (name) => {
       return ['field', 'cacheField', 'dataField', 'pivotField', 'pageField'].includes(name);
     },
@@ -51,12 +53,12 @@ export function parsePivotTableXml(
     .filter((f: any): f is string => Boolean(f));
 
   const pageFieldNodes = parsedPivot.pageFields?.pageField || [];
-  const filters: string[] = pageFieldNodes
+  const filters: PivotFilter[] = pageFieldNodes
     .map((pf: any) => {
       const idx = Number(pf['@_fld']);
-      return !isNaN(idx) && fieldNames[idx] ? fieldNames[idx] : undefined;
+      return !isNaN(idx) && fieldNames[idx] ? { field: fieldNames[idx] } : undefined;
     })
-    .filter((f: any): f is string => Boolean(f));
+    .filter((f: any): f is PivotFilter => Boolean(f));
 
   const dataFieldNodes = parsedPivot.dataFields?.dataField || [];
   const values: PivotDataField[] = dataFieldNodes.map((df: any) => {

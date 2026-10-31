@@ -1,20 +1,19 @@
 import { PivotTableDefinition, WorkSheet, Range } from '../types.js';
 import { encode_cell, encode_range } from '../utils/address.js';
 import { extractSheetData } from './compute.js';
-import { escapeXml } from '../styles/index.js';
+import { escapeAttr } from '../xlsx/xml.js';
 
 export interface OpenXmlPivotParts {
   cacheDefinitionXml: string;
   cacheRecordsXml: string;
-  cacheDefRelsXml: string;
   pivotTableXml: string;
-  pivotTableRelsXml: string;
 }
 
 export function generateOpenXmlPivotParts(
   sourceSheet: WorkSheet,
   pivot: PivotTableDefinition,
-  id: number
+  id: number,
+  recordsRid: string
 ): OpenXmlPivotParts {
   const { headers, rows } = extractSheetData(sourceSheet, pivot.sourceRange);
   const recordCount = rows.length;
@@ -44,19 +43,19 @@ export function generateOpenXmlPivotParts(
             } else if (typeof v === 'boolean') {
               return `<b v="${v ? '1' : '0'}"/>`;
             } else {
-              return `<s v="${escapeXml(String(v))}"/>`;
+              return `<s v="${escapeAttr(String(v))}"/>`;
             }
           })
           .join('')}</sharedItems>`;
       } else {
         itemsXml = '<sharedItems/>';
       }
-      return `<cacheField name="${escapeXml(name)}" numFmtId="0">${itemsXml}</cacheField>`;
+      return `<cacheField name="${escapeAttr(name)}" numFmtId="0">${itemsXml}</cacheField>`;
     })
     .join('');
 
   const sourceRangeStr = encode_range(pivot.sourceRange);
-  const cacheDefinitionXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" refreshOnLoad="1" recordCount="${recordCount}"><cacheSource type="worksheet"><worksheetSource sheet="${escapeXml(
+  const cacheDefinitionXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="${recordsRid}" refreshOnLoad="1" recordCount="${recordCount}"><cacheSource type="worksheet"><worksheetSource sheet="${escapeAttr(
     pivot.sourceSheet
   )}" ref="${sourceRangeStr}"/></cacheSource><cacheFields count="${headers.length}">${cacheFieldsXml}</cacheFields></pivotCacheDefinition>`;
 
@@ -75,7 +74,7 @@ export function generateOpenXmlPivotParts(
           if (typeof v === 'boolean') {
             return `<b v="${v ? '1' : '0'}"/>`;
           }
-          return `<s v="${escapeXml(String(v))}"/>`;
+          return `<s v="${escapeAttr(String(v))}"/>`;
         })
         .join('');
       return `<r>${cellsXml}</r>`;
@@ -84,8 +83,6 @@ export function generateOpenXmlPivotParts(
 
   const cacheRecordsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${recordCount}">${recordsXml}</pivotCacheRecords>`;
 
-  // Cache def rels
-  const cacheDefRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords${id}.xml"/></Relationships>`;
 
   // 3. Pivot Table Definition XML
   const rowFieldIndices = pivot.rows
@@ -97,7 +94,7 @@ export function generateOpenXmlPivotParts(
     .filter((idx): idx is number => idx !== undefined);
 
   const filterFieldIndices = pivot.filters
-    .map((ff) => headerIndexMap.get(ff))
+    .map((ff) => headerIndexMap.get(typeof ff === 'string' ? ff : ff.field))
     .filter((idx): idx is number => idx !== undefined);
 
   const dataFieldsConfig = pivot.values.map((v) => {
@@ -131,7 +128,7 @@ export function generateOpenXmlPivotParts(
         return `<pivotField axis="axisPage" showAll="0"/>`;
       }
       if (isData) {
-        return `<pivotField data="1"/>`;
+        return `<pivotField dataField="1" showAll="0"/>`;
       }
       return '<pivotField/>';
     })
@@ -144,11 +141,11 @@ export function generateOpenXmlPivotParts(
           .join('')}</rowFields>`
       : '';
 
+  // More than one data field adds the virtual "Values" field (x=-2) to the columns.
+  const colFieldXs = dataFieldsConfig.length > 1 ? [...colFieldIndices, -2] : colFieldIndices;
   const colFieldsXml =
-    colFieldIndices.length > 0
-      ? `<colFields count="${colFieldIndices.length}">${colFieldIndices
-          .map((idx) => `<field x="${idx}"/>`)
-          .join('')}</colFields>`
+    colFieldXs.length > 0
+      ? `<colFields count="${colFieldXs.length}">${colFieldXs.map((idx) => `<field x="${idx}"/>`).join('')}</colFields>`
       : '';
 
   const pageFieldsXml =
@@ -161,7 +158,7 @@ export function generateOpenXmlPivotParts(
   const dataFieldsXml =
     dataFieldsConfig.length > 0
       ? `<dataFields count="${dataFieldsConfig.length}">${dataFieldsConfig
-          .map((df) => `<dataField name="${escapeXml(df.name)}" fld="${df.fld}" subtotal="${df.subtotal}" baseField="0" baseItem="0"/>`)
+          .map((df) => `<dataField name="${escapeAttr(df.name)}" fld="${df.fld}" subtotal="${df.subtotal}" baseField="0" baseItem="0"/>`)
           .join('')}</dataFields>`
       : '';
 
@@ -174,19 +171,16 @@ export function generateOpenXmlPivotParts(
 
   const styleName = pivot.styleName || 'PivotStyleLight16';
 
-  const pivotTableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="${escapeXml(
+  const pivotTableXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="${escapeAttr(
     pivot.name
   )}" cacheId="${id}" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Data"><location ref="${targetRangeStr}" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="${
     headers.length
   }">${pivotFieldsXml}</pivotFields>${rowFieldsXml}${colFieldsXml}${pageFieldsXml}${dataFieldsXml}<pivotTableStyleInfo name="${styleName}" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>`;
 
-  const pivotTableRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition${id}.xml"/></Relationships>`;
 
   return {
     cacheDefinitionXml,
     cacheRecordsXml,
-    cacheDefRelsXml,
     pivotTableXml,
-    pivotTableRelsXml,
   };
 }

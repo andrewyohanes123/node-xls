@@ -8,7 +8,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:tz": "TZ=UTC vitest run && TZ=Asia/Jakarta vitest run && TZ=America/New_York vitest run",
+    "test:tz": "TZ=UTC vitest run && TZ=Asia/Jakarta vitest run && TZ=America/New_York vitest run && TZ=Pacific/Kiritimati vitest run",
     "test:lo": "npm run showcase && scripts/render.sh",
     "schemas": "scripts/fetch-schemas.sh",
     "showcase": "npm run build && node scripts/showcase.mjs",

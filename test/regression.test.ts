@@ -173,8 +173,10 @@ describe('audit regressions: utils', () => {
     const wb = utils.book_new();
     expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'x'.repeat(32))).toThrow();
     expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'a/b')).toThrow();
-    expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'History')).not.toThrow();
-    expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'history')).toThrow();
+    expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), "'quoted'")).toThrow();
+    expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'History')).toThrow(); // reserved by Excel
+    expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'Data')).not.toThrow();
+    expect(() => utils.book_append_sheet(wb, utils.aoa_to_sheet([[1]]), 'data')).toThrow(); // names are case-insensitive
   });
 
   it('sheet_to_json skips blank rows in object mode like SheetJS', () => {

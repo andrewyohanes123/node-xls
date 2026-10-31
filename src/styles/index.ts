@@ -1,312 +1,294 @@
-import { CellStyle, Font, Fill, Border, BorderSide, Alignment, Color } from '../types.js';
+/**
+ * styles.xml generation.
+ *
+ * Cell styles (`cell.s`) are deduplicated into fonts/fills/borders/numFmts and
+ * cellXfs; conditional-formatting styles become differential formats (dxfs).
+ * Index 0 of every collection is Excel's default; fills 0 and 1 are reserved
+ * (none, gray125) as Excel requires.
+ */
+import {
+  CellStyle,
+  Font,
+  Fill,
+  Border,
+  BorderSide,
+  Alignment,
+  Color,
+  CellProtection,
+  CFStyle,
+} from '../types.js';
+import { XML_HEADER, NS, attrs, AttrValue, escapeAttr } from '../xlsx/xml.js';
+import { builtinFormatId, BUILTIN_FORMATS } from '../utils/format.js';
 
-export const BUILTIN_NUM_FMTS: Record<number, string> = {
-  0: 'General',
-  1: '0',
-  2: '0.00',
-  3: '#,##0',
-  4: '#,##0.00',
-  9: '0%',
-  10: '0.00%',
-  11: '0.00E+00',
-  12: '# ?/?',
-  13: '# ??/??',
-  14: 'mm-dd-yy',
-  15: 'd-mmm-yy',
-  16: 'd-mmm',
-  17: 'mmm-yy',
-  18: 'h:mm AM/PM',
-  19: 'h:mm:ss AM/PM',
-  20: 'h:mm',
-  21: 'h:mm:ss',
-  22: 'm/d/yy h:mm',
-  37: '#,##0 ;(#,##0)',
-  38: '#,##0 ;[Red](#,##0)',
-  39: '#,##0.00;(#,##0.00)',
-  40: '#,##0.00;[Red](#,##0.00)',
-  45: 'mm:ss',
-  46: '[h]:mm:ss',
-  47: 'mmss.0',
-  48: '##0.0E+0',
-  49: '@',
-};
+export { escapeXml } from '../xlsx/xml.js';
+export { BUILTIN_FORMATS as BUILTIN_NUM_FMTS } from '../utils/format.js';
 
-const REVERSE_BUILTIN_NUM_FMTS: Record<string, number> = {};
-for (const [id, fmt] of Object.entries(BUILTIN_NUM_FMTS)) {
-  REVERSE_BUILTIN_NUM_FMTS[fmt.toLowerCase()] = Number(id);
+/** Normalises '#F00', 'FF0000', '80FF0000' to uppercase ARGB. */
+export function normalizeRgb(hex: string): string {
+  const h = hex.replace(/^#/, '').toUpperCase();
+  if (/^[0-9A-F]{3}$/.test(h)) return 'FF' + h.split('').map((c) => c + c).join('');
+  if (/^[0-9A-F]{6}$/.test(h)) return 'FF' + h;
+  if (/^[0-9A-F]{8}$/.test(h)) return h;
+  throw new Error(`Invalid color "${hex}": expected RGB or ARGB hex`);
 }
 
+/** @deprecated kept for compatibility; returns ARGB. */
 export function normalizeColor(color?: Color): string | undefined {
   if (!color) return undefined;
-  let hex: string | undefined;
-  if (typeof color === 'string') {
-    hex = color.replace(/^#/, '');
-  } else if (color.rgb) {
-    hex = color.rgb.replace(/^#/, '');
-  }
-  if (!hex) return undefined;
-  if (hex.length === 6) {
-    return 'FF' + hex.toUpperCase();
-  }
-  if (hex.length === 8) {
-    return hex.toUpperCase();
-  }
-  if (hex.length === 3) {
-    return 'FF' + hex.split('').map((c) => c + c).join('').toUpperCase();
-  }
-  return hex.toUpperCase();
+  const rgb = typeof color === 'string' ? color : color.rgb;
+  return rgb ? normalizeRgb(rgb) : undefined;
 }
 
+/** ARGB -> 6-digit RGB when fully opaque (reader convenience). */
 export function denormalizeColor(argb?: string): string | undefined {
   if (!argb) return undefined;
-  if (argb.length === 8 && argb.startsWith('FF')) {
-    return argb.substring(2);
-  }
-  return argb;
+  const up = argb.toUpperCase();
+  return up.length === 8 && up.startsWith('FF') ? up.substring(2) : up;
 }
 
-export function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+/** CT_Color attributes for a color, or undefined when the color is empty. */
+export function colorAttrs(color?: Color): Array<[string, AttrValue]> | undefined {
+  if (color === undefined || color === null) return undefined;
+  if (typeof color === 'string') return [['rgb', normalizeRgb(color)]];
+  const out: Array<[string, AttrValue]> = [];
+  if (color.auto) out.push(['auto', true]);
+  else if (color.rgb) out.push(['rgb', normalizeRgb(color.rgb)]);
+  else if (color.theme !== undefined) out.push(['theme', color.theme]);
+  else if (color.indexed !== undefined) out.push(['indexed', color.indexed]);
+  else return undefined;
+  if (color.tint !== undefined && color.tint !== 0) out.push(['tint', color.tint]);
+  return out;
+}
+
+export function colorXml(tag: string, color?: Color): string {
+  const a = colorAttrs(color);
+  return a ? `<${tag}${attrs(a)}/>` : '';
+}
+
+interface FontXmlOptions {
+  /** 'name' for cell fonts, 'rFont' for rich-text runs. */
+  nameTag?: 'name' | 'rFont';
+  /** Fill in Excel's default size/color/name (cell fonts). */
+  withDefaults?: boolean;
+}
+
+/** Inner XML of a <font>/<rPr> element in Excel's canonical child order. */
+export function fontChildren(font: Font, opts: FontXmlOptions = {}): string {
+  const { nameTag = 'name', withDefaults = true } = opts;
+  let x = '';
+  if (font.bold) x += '<b/>';
+  if (font.italic) x += '<i/>';
+  if (font.strike) x += '<strike/>';
+  if (font.outline) x += '<outline/>';
+  if (font.shadow) x += '<shadow/>';
+  if (font.underline) {
+    x += font.underline === true || font.underline === 'single' ? '<u/>' : `<u val="${escapeAttr(font.underline)}"/>`;
+  }
+  if (font.vertAlign) x += `<vertAlign val="${font.vertAlign}"/>`;
+  const sz = font.sz ?? (withDefaults ? 11 : undefined);
+  if (sz !== undefined) x += `<sz val="${sz}"/>`;
+  const color = colorXml('color', font.color);
+  x += color || (withDefaults ? '<color theme="1"/>' : '');
+  const name = font.name ?? (withDefaults ? 'Calibri' : undefined);
+  if (name !== undefined) x += `<${nameTag} val="${escapeAttr(name)}"/>`;
+  const family = font.family ?? (withDefaults && font.name === undefined ? 2 : undefined);
+  if (family !== undefined) x += `<family val="${family}"/>`;
+  if (font.charset !== undefined) x += `<charset val="${font.charset}"/>`;
+  const scheme = font.scheme ?? (withDefaults && font.name === undefined ? 'minor' : undefined);
+  if (scheme !== undefined && scheme !== 'none') x += `<scheme val="${scheme}"/>`;
+  return x;
+}
+
+function borderSideXml(name: string, side?: BorderSide): string {
+  if (!side || !side.style || side.style === 'none') return `<${name}/>`;
+  return `<${name} style="${side.style}">${colorXml('color', side.color) || '<color auto="1"/>'}</${name}>`;
+}
+
+function borderXml(border: Border): string {
+  return `<border${attrs([
+    ['diagonalUp', border.diagonalUp],
+    ['diagonalDown', border.diagonalDown],
+  ])}>${borderSideXml('left', border.left)}${borderSideXml('right', border.right)}${borderSideXml('top', border.top)}${borderSideXml(
+    'bottom',
+    border.bottom
+  )}${borderSideXml('diagonal', border.diagonal)}</border>`;
+}
+
+/** Converts SheetJS-style -90..90 rotation to Excel's 0..180 encoding. */
+function encodeRotation(r: number): number {
+  if (r === 255) return 255;
+  if (r < 0) return Math.min(180, 90 - r);
+  return Math.min(r, 180);
+}
+
+function alignmentXml(a?: Alignment): string {
+  if (!a) return '';
+  const a2 = attrs([
+    ['horizontal', a.horizontal],
+    ['vertical', a.vertical],
+    ['textRotation', a.textRotation !== undefined ? encodeRotation(a.textRotation) : undefined],
+    ['wrapText', a.wrapText],
+    ['indent', a.indent],
+    ['shrinkToFit', a.shrinkToFit],
+    ['readingOrder', a.readingOrder],
+  ]);
+  return a2 ? `<alignment${a2}/>` : '';
+}
+
+function protectionXml(p?: CellProtection): string {
+  if (!p) return '';
+  const a = attrs([
+    ['locked', p.locked === undefined ? undefined : p.locked ? '1' : '0'],
+    ['hidden', p.hidden === undefined ? undefined : p.hidden ? '1' : '0'],
+  ]);
+  return a ? `<protection${a}/>` : '';
+}
+
+class IndexedSet {
+  readonly items: string[] = [];
+  private map = new Map<string, number>();
+  add(xml: string): number {
+    const hit = this.map.get(xml);
+    if (hit !== undefined) return hit;
+    const idx = this.items.length;
+    this.items.push(xml);
+    this.map.set(xml, idx);
+    return idx;
+  }
+  get size(): number {
+    return this.items.length;
+  }
 }
 
 export class StyleBuilder {
-  private fonts: string[] = [];
-  private fontMap = new Map<string, number>();
-
-  private fills: string[] = [];
-  private fillMap = new Map<string, number>();
-
-  private borders: string[] = [];
-  private borderMap = new Map<string, number>();
-
+  private fonts = new IndexedSet();
+  private fills = new IndexedSet();
+  private borders = new IndexedSet();
+  private cellXfs = new IndexedSet();
+  private dxfs = new IndexedSet();
   private numFmts: Array<{ id: number; code: string }> = [];
-  private numFmtMap = new Map<string, number>();
-  private nextCustomNumFmtId = 164;
-
-  private cellXfs: string[] = [];
-  private xfMap = new Map<string, number>();
+  private numFmtIds = new Map<string, number>();
+  private nextNumFmtId = 164;
+  private cache = new Map<string, number>();
 
   constructor() {
-    // Default Font (index 0)
-    this.addFontXml('<font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>');
-
-    // Standard OpenXML fills: index 0 = none, index 1 = gray125
-    this.addFillXml('<fill><patternFill patternType="none"/></fill>');
-    this.addFillXml('<fill><patternFill patternType="gray125"/></fill>');
-
-    // Default Border (index 0)
-    this.addBorderXml('<border><left/><right/><top/><bottom/><diagonal/></border>');
-
-    // Default normal cellXf (index 0)
-    this.addXfXml('<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>');
+    this.fonts.add(`<font>${fontChildren({})}</font>`);
+    this.fills.add('<fill><patternFill patternType="none"/></fill>');
+    this.fills.add('<fill><patternFill patternType="gray125"/></fill>');
+    this.borders.add('<border><left/><right/><top/><bottom/><diagonal/></border>');
+    this.cellXfs.add('<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>');
   }
 
-  private addFontXml(xml: string): number {
-    if (this.fontMap.has(xml)) {
-      return this.fontMap.get(xml)!;
-    }
-    const idx = this.fonts.length;
-    this.fonts.push(xml);
-    this.fontMap.set(xml, idx);
-    return idx;
+  get cellXfCount(): number {
+    return this.cellXfs.size;
   }
 
-  private addFillXml(xml: string): number {
-    if (this.fillMap.has(xml)) {
-      return this.fillMap.get(xml)!;
-    }
-    const idx = this.fills.length;
-    this.fills.push(xml);
-    this.fillMap.set(xml, idx);
-    return idx;
-  }
-
-  private addBorderXml(xml: string): number {
-    if (this.borderMap.has(xml)) {
-      return this.borderMap.get(xml)!;
-    }
-    const idx = this.borders.length;
-    this.borders.push(xml);
-    this.borderMap.set(xml, idx);
-    return idx;
-  }
-
-  private addXfXml(xml: string): number {
-    if (this.xfMap.has(xml)) {
-      return this.xfMap.get(xml)!;
-    }
-    const idx = this.cellXfs.length;
-    this.cellXfs.push(xml);
-    this.xfMap.set(xml, idx);
-    return idx;
-  }
-
-  public registerNumFmt(formatCode: string): number {
-    const lower = formatCode.toLowerCase();
-    if (REVERSE_BUILTIN_NUM_FMTS[lower] !== undefined) {
-      return REVERSE_BUILTIN_NUM_FMTS[lower];
-    }
-    if (this.numFmtMap.has(formatCode)) {
-      return this.numFmtMap.get(formatCode)!;
-    }
-    const id = this.nextCustomNumFmtId++;
-    this.numFmtMap.set(formatCode, id);
-    this.numFmts.push({ id, code: formatCode });
+  registerNumFmt(fmt: string | number): number {
+    if (typeof fmt === 'number') return fmt;
+    const builtin = builtinFormatId(fmt);
+    if (builtin !== undefined) return builtin;
+    const hit = this.numFmtIds.get(fmt);
+    if (hit !== undefined) return hit;
+    const id = this.nextNumFmtId++;
+    this.numFmtIds.set(fmt, id);
+    this.numFmts.push({ id, code: fmt });
     return id;
   }
 
-  public registerFont(font?: Font): number {
+  registerFont(font?: Font): number {
     if (!font) return 0;
-    const parts: string[] = [];
-    if (font.bold) parts.push('<b/>');
-    if (font.italic) parts.push('<i/>');
-    if (font.strike) parts.push('<strike/>');
-    if (font.underline) {
-      if (typeof font.underline === 'string') {
-        parts.push(`<u val="${font.underline}"/>`);
-      } else {
-        parts.push('<u/>');
-      }
-    }
-    const sz = font.sz || 11;
-    parts.push(`<sz val="${sz}"/>`);
-
-    const col = normalizeColor(font.color);
-    if (col) {
-      parts.push(`<color rgb="${col}"/>`);
-    } else {
-      parts.push('<color theme="1"/>');
-    }
-
-    const name = font.name || 'Calibri';
-    parts.push(`<name val="${escapeXml(name)}"/>`);
-    if (font.family !== undefined) {
-      parts.push(`<family val="${font.family}"/>`);
-    }
-    if (font.scheme) {
-      parts.push(`<scheme val="${font.scheme}"/>`);
-    }
-
-    const xml = `<font>${parts.join('')}</font>`;
-    return this.addFontXml(xml);
+    return this.fonts.add(`<font>${fontChildren(font)}</font>`);
   }
 
-  public registerFill(fill?: Fill): number {
+  registerFill(fill?: Fill): number {
     if (!fill) return 0;
-    const patternType = fill.patternType || (fill.fgColor ? 'solid' : 'none');
-    if (patternType === 'none' && !fill.fgColor && !fill.bgColor) return 0;
-
-    const parts: string[] = [];
-    const fg = normalizeColor(fill.fgColor);
-    const bg = normalizeColor(fill.bgColor);
-
-    if (fg) {
-      parts.push(`<fgColor rgb="${fg}"/>`);
-    }
-    if (bg) {
-      parts.push(`<bgColor rgb="${bg}"/>`);
-    } else if (fg && patternType === 'solid') {
-      parts.push('<bgColor indexed="64"/>');
-    }
-
-    const xml = `<fill><patternFill patternType="${patternType}">${parts.join('')}</patternFill></fill>`;
-    return this.addFillXml(xml);
+    const fg = colorXml('fgColor', fill.fgColor);
+    const bg = colorXml('bgColor', fill.bgColor);
+    const pattern = fill.patternType ?? (fg || bg ? 'solid' : 'none');
+    if (pattern === 'none' && !fg && !bg) return 0;
+    if (pattern === 'gray125' && !fg && !bg) return 1;
+    const children = fg + (bg || (fg && pattern === 'solid' ? '<bgColor indexed="64"/>' : ''));
+    return this.fills.add(`<fill><patternFill patternType="${pattern}"${children ? `>${children}</patternFill>` : '/>'}</fill>`);
   }
 
-  private renderBorderSide(name: string, side?: BorderSide): string {
-    if (!side || !side.style || side.style === 'none') {
-      return `<${name}/>`;
-    }
-    const col = normalizeColor(side.color);
-    if (col) {
-      return `<${name} style="${side.style}"><color rgb="${col}"/></${name}>`;
-    }
-    return `<${name} style="${side.style}"><color auto="1"/></${name}>`;
-  }
-
-  public registerBorder(border?: Border): number {
+  registerBorder(border?: Border): number {
     if (!border) return 0;
-    const left = this.renderBorderSide('left', border.left);
-    const right = this.renderBorderSide('right', border.right);
-    const top = this.renderBorderSide('top', border.top);
-    const bottom = this.renderBorderSide('bottom', border.bottom);
-    const diagonal = this.renderBorderSide('diagonal', border.diagonal);
-
-    let attrs = '';
-    if (border.diagonalUp) attrs += ' diagonalUp="1"';
-    if (border.diagonalDown) attrs += ' diagonalDown="1"';
-
-    const xml = `<border${attrs}>${left}${right}${top}${bottom}${diagonal}</border>`;
-    return this.addBorderXml(xml);
+    return this.borders.add(borderXml(border));
   }
 
-  public getStyleIndex(style?: CellStyle): number {
+  /** cellXfs index for a style (0 = default). */
+  getStyleIndex(style?: CellStyle): number {
     if (!style) return 0;
+    const key = JSON.stringify(style);
+    const cached = this.cache.get(key);
+    if (cached !== undefined) return cached;
 
     const fontId = this.registerFont(style.font);
     const fillId = this.registerFill(style.fill);
     const borderId = this.registerBorder(style.border);
+    const numFmtId = style.numFmt !== undefined ? this.registerNumFmt(style.numFmt) : 0;
+    const align = alignmentXml(style.alignment);
+    const prot = protectionXml(style.protection);
 
-    let numFmtId = 0;
-    if (style.numFmt !== undefined) {
-      if (typeof style.numFmt === 'number') {
-        numFmtId = style.numFmt;
-      } else {
-        numFmtId = this.registerNumFmt(style.numFmt);
-      }
-    }
-
-    const align = style.alignment;
-    let alignXml = '';
-    let hasAlign = false;
-    if (align) {
-      const attrs: string[] = [];
-      if (align.horizontal) attrs.push(`horizontal="${align.horizontal}"`);
-      if (align.vertical) attrs.push(`vertical="${align.vertical}"`);
-      if (align.wrapText) attrs.push('wrapText="1"');
-      if (align.textRotation !== undefined) attrs.push(`textRotation="${align.textRotation}"`);
-      if (align.indent !== undefined) attrs.push(`indent="${align.indent}"`);
-      if (align.shrinkToFit) attrs.push('shrinkToFit="1"');
-      if (align.readingOrder !== undefined) attrs.push(`readingOrder="${align.readingOrder}"`);
-      if (attrs.length > 0) {
-        alignXml = `<alignment ${attrs.join(' ')}/>`;
-        hasAlign = true;
-      }
-    }
-
-    const applyAttrs: string[] = [];
-    if (fontId > 0) applyAttrs.push('applyFont="1"');
-    if (fillId > 0) applyAttrs.push('applyFill="1"');
-    if (borderId > 0) applyAttrs.push('applyBorder="1"');
-    if (numFmtId > 0) applyAttrs.push('applyNumberFormat="1"');
-    if (hasAlign) applyAttrs.push('applyAlignment="1"');
-
-    const applyStr = applyAttrs.length > 0 ? ` ${applyAttrs.join(' ')}` : '';
-    const xml = `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0"${applyStr}>${alignXml}</xf>`;
-
-    return this.addXfXml(xml);
+    const xml = `<xf${attrs([
+      ['numFmtId', numFmtId],
+      ['fontId', fontId],
+      ['fillId', fillId],
+      ['borderId', borderId],
+      ['xfId', 0],
+      ['applyNumberFormat', numFmtId > 0],
+      ['applyFont', fontId > 0],
+      ['applyFill', fillId > 0],
+      ['applyBorder', borderId > 0],
+      ['applyAlignment', align !== ''],
+      ['applyProtection', prot !== ''],
+    ])}${align || prot ? `>${align}${prot}</xf>` : '/>'}`;
+    const idx = this.cellXfs.add(xml);
+    this.cache.set(key, idx);
+    return idx;
   }
 
-  public buildXml(): string {
-    const numFmtsXml =
-      this.numFmts.length > 0
-        ? `<numFmts count="${this.numFmts.length}">${this.numFmts
-            .map((nf) => `<numFmt numFmtId="${nf.id}" formatCode="${escapeXml(nf.code)}"/>`)
-            .join('')}</numFmts>`
-        : '';
+  /** dxfs index for a conditional-formatting style. */
+  registerDxf(style: CFStyle): number {
+    let x = '';
+    if (style.font) x += `<font>${fontChildren(style.font, { withDefaults: false })}</font>`;
+    if (style.numFmt !== undefined) {
+      const id = this.registerNumFmt(style.numFmt);
+      const code = typeof style.numFmt === 'string' ? style.numFmt : BUILTIN_FORMATS[id] ?? 'General';
+      x += `<numFmt numFmtId="${id}" formatCode="${escapeAttr(code)}"/>`;
+    }
+    if (style.fill) {
+      const f = style.fill;
+      const pattern = f.patternType ?? 'solid';
+      if (pattern === 'solid') {
+        // In differential formats the solid fill color is stored as bgColor.
+        x += `<fill><patternFill>${colorXml('bgColor', f.fgColor ?? f.bgColor)}</patternFill></fill>`;
+      } else {
+        x += `<fill><patternFill patternType="${pattern}">${colorXml('fgColor', f.fgColor)}${colorXml('bgColor', f.bgColor)}</patternFill></fill>`;
+      }
+    }
+    if (style.border) x += borderXml(style.border);
+    return this.dxfs.add(`<dxf>${x}</dxf>`);
+  }
 
-    const fontsXml = `<fonts count="${this.fonts.length}">${this.fonts.join('')}</fonts>`;
-    const fillsXml = `<fills count="${this.fills.length}">${this.fills.join('')}</fills>`;
-    const bordersXml = `<borders count="${this.borders.length}">${this.borders.join('')}</borders>`;
-    const cellStyleXfsXml = '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>';
-    const cellXfsXml = `<cellXfs count="${this.cellXfs.length}">${this.cellXfs.join('')}</cellXfs>`;
-    const cellStylesXml = '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>';
-
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${numFmtsXml}${fontsXml}${fillsXml}${bordersXml}${cellStyleXfsXml}${cellXfsXml}${cellStylesXml}</styleSheet>`;
+  buildXml(): string {
+    const numFmts = this.numFmts.length
+      ? `<numFmts count="${this.numFmts.length}">${this.numFmts
+          .map((nf) => `<numFmt numFmtId="${nf.id}" formatCode="${escapeAttr(nf.code)}"/>`)
+          .join('')}</numFmts>`
+      : '';
+    const list = (tag: string, set: IndexedSet) => `<${tag} count="${set.size}">${set.items.join('')}</${tag}>`;
+    return (
+      `${XML_HEADER}<styleSheet xmlns="${NS.main}">` +
+      numFmts +
+      list('fonts', this.fonts) +
+      list('fills', this.fills) +
+      list('borders', this.borders) +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+      list('cellXfs', this.cellXfs) +
+      '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+      (this.dxfs.size ? list('dxfs', this.dxfs) : '') +
+      '</styleSheet>'
+    );
   }
 }

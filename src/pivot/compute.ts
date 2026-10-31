@@ -3,6 +3,7 @@ import {
   PivotTableOptions,
   PivotDataField,
   PivotSubtotal,
+  PivotFilter,
   WorkSheet,
   WorkBook,
   CellObject,
@@ -110,7 +111,7 @@ export function computePivotData(
     rows?: string[];
     cols?: string[];
     values?: (string | PivotDataField)[];
-    filters?: string[];
+    filters?: Array<string | PivotFilter>;
     showRowTotals?: boolean;
     showColTotals?: boolean;
   }

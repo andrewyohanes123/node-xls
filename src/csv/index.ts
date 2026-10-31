@@ -1,112 +1,89 @@
-import { WorkBook, WorkSheet, ParsingOptions, WritingOptions } from '../types.js';
-import { sheet_to_csv, aoa_to_sheet } from '../utils/sheet.js';
+import { WorkBook, ParsingOptions, WritingOptions, WorkSheet } from '../types.js';
+import { sheet_to_csv, aoa_to_sheet, sheet_to_html } from '../utils/sheet.js';
 import { book_new, book_append_sheet } from '../utils/book.js';
 
+/** RFC 4180 parser (quoted fields, escaped quotes, CRLF/LF/CR line breaks). */
 export function parseCsv(text: string, fs = ','): string[][] {
   const lines: string[][] = [];
-  let currentRow: string[] = [];
-  let currentField = '';
-  let insideQuotes = false;
-
-  let i = 0;
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
   const len = text.length;
-
-  while (i < len) {
-    const char = text[i];
-
-    if (insideQuotes) {
-      if (char === '"') {
-        if (i + 1 < len && text[i + 1] === '"') {
-          // Escaped quote
-          currentField += '"';
-          i += 2;
-          continue;
-        } else {
-          insideQuotes = false;
+  for (let i = 0; i < len; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
           i++;
-          continue;
-        }
-      } else {
-        currentField += char;
-        i++;
-        continue;
-      }
-    } else {
-      if (char === '"') {
-        insideQuotes = true;
-        i++;
-        continue;
-      }
-
-      if (char === fs) {
-        currentRow.push(currentField);
-        currentField = '';
-        i++;
-        continue;
-      }
-
-      if (char === '\r') {
-        if (i + 1 < len && text[i + 1] === '\n') {
-          i++;
-        }
-        currentRow.push(currentField);
-        lines.push(currentRow);
-        currentRow = [];
-        currentField = '';
-        i++;
-        continue;
-      }
-
-      if (char === '\n') {
-        currentRow.push(currentField);
-        lines.push(currentRow);
-        currentRow = [];
-        currentField = '';
-        i++;
-        continue;
-      }
-
-      currentField += char;
-      i++;
+        } else quoted = false;
+      } else field += ch;
+      continue;
     }
+    if (ch === '"' && field === '') quoted = true;
+    else if (ch === fs) {
+      row.push(field);
+      field = '';
+    } else if (ch === '\r' || ch === '\n') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(field);
+      lines.push(row);
+      row = [];
+      field = '';
+    } else field += ch;
   }
-
-  if (currentField.length > 0 || currentRow.length > 0) {
-    currentRow.push(currentField);
-    lines.push(currentRow);
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    lines.push(row);
   }
-
   return lines;
 }
 
-export function readCsv(data: string, opts?: ParsingOptions): WorkBook {
-  const fs = opts?.FS || (data.includes('\t') && !data.includes(',') ? '\t' : ',');
-  const rows = parseCsv(data, fs);
+function detectSeparator(text: string): string {
+  const firstLine = text.slice(0, text.search(/\r|\n/) === -1 ? undefined : text.search(/\r|\n/));
+  const counts = [',', '\t', ';', '|'].map((s) => [s, firstLine.split(s).length - 1] as const);
+  counts.sort((a, b) => b[1] - a[1]);
+  return counts[0][1] > 0 ? counts[0][0] : ',';
+}
 
-  // Convert types if numeric/boolean
+export function readCsv(data: string, opts?: ParsingOptions): WorkBook {
+  const text = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
+  const fs = opts?.FS || detectSeparator(text);
+  let rows = parseCsv(text, fs);
+  if (opts?.sheetRows && opts.sheetRows > 0) rows = rows.slice(0, opts.sheetRows);
   const converted = rows.map((row) =>
     row.map((val) => {
+      if (opts?.raw) return val;
       const trimmed = val.trim();
-      if (trimmed === '') return '';
-      if (trimmed === 'true') return true;
-      if (trimmed === 'false') return false;
+      if (trimmed === '') return undefined;
+      const upper = trimmed.toUpperCase();
+      if (upper === 'TRUE') return true;
+      if (upper === 'FALSE') return false;
       const num = Number(trimmed);
-      if (!isNaN(num) && String(num) === trimmed) return num;
+      if (Number.isFinite(num) && String(num) === trimmed) return num;
       return val;
     })
   );
-
-  const ws = aoa_to_sheet(converted);
   const wb = book_new();
-  book_append_sheet(wb, ws, 'Sheet1');
+  book_append_sheet(wb, aoa_to_sheet(converted), 'Sheet1');
   return wb;
 }
 
+export function pickSheet(wb: WorkBook, sheet?: string | number): WorkSheet {
+  const name = typeof sheet === 'number' ? wb.SheetNames[sheet] : (sheet ?? wb.SheetNames[0]);
+  if (sheet !== undefined && (name === undefined || !wb.Sheets[name])) throw new Error(`Cannot find sheet |${sheet}|`);
+  return (name !== undefined && wb.Sheets[name]) || {};
+}
+
 export function writeCsv(wb: WorkBook, opts?: WritingOptions): string {
-  const firstSheetName = wb.SheetNames[0] || 'Sheet1';
-  const ws = wb.Sheets[firstSheetName] || {};
-  return sheet_to_csv(ws, {
-    FS: opts?.bookType === 'txt' ? '\t' : ',',
-    blankrows: true,
+  const ws = pickSheet(wb, opts?.sheet);
+  return opts?.bookType === 'txt' ? sheet_to_csv(ws, { FS: '\t' }) : sheet_to_csv(ws);
+}
+
+export function writeHtml(wb: WorkBook, opts?: WritingOptions): string {
+  const ws = pickSheet(wb, opts?.sheet);
+  return sheet_to_html(ws, {
+    header: '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>node-xls export</title></head><body>',
+    footer: '</body></html>',
   });
 }
