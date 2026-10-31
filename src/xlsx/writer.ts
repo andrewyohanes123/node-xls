@@ -77,7 +77,10 @@ export function buildXlsxArchiveFiles(wb: WorkBook, opts?: WritingOptions): Reco
     pkg.addPart('xl/sharedStrings.xml', ctx.sst.buildXml(), CONTENT_TYPES.sharedStrings);
     pkg.addRel('xl/workbook.xml', REL_TYPES.sharedStrings, 'xl/sharedStrings.xml');
   }
-  pkg.addPart('xl/workbook.xml', buildWorkbookXml(ctx, sheets, caches), CONTENT_TYPES.workbook);
+  // .xlsm needs the macro-enabled content type (Excel rejects an extension/content mismatch);
+  // node-xls writes no VBA project, so the file simply contains no macros.
+  const wbType = opts?.bookType === 'xlsm' ? CONTENT_TYPES.workbookMacro : CONTENT_TYPES.workbook;
+  pkg.addPart('xl/workbook.xml', buildWorkbookXml(ctx, sheets, caches), wbType);
 
   return pkg.build();
 }

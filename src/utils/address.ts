@@ -57,7 +57,19 @@ export function encode_range(a: Range | CellAddress, b?: CellAddress): string {
   return s === e ? s : `${s}:${e}`;
 }
 
+export const MAX_ROW = 1048575;
+export const MAX_COL = 16383;
+
+/**
+ * Decodes 'A1:B2', 'B2', whole columns ('A:C') and whole rows ('2:5').
+ * (SheetJS returns -1 rows/columns for the latter; node-xls spans the grid.)
+ */
 export function decode_range(rangeStr: string): Range {
+  const whole = /^\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})$/.exec(rangeStr) ?? /^\$?(\d+):\$?(\d+)$/.exec(rangeStr);
+  if (whole) {
+    if (/\d/.test(whole[1])) return { s: { c: 0, r: decode_row(whole[1]) }, e: { c: MAX_COL, r: decode_row(whole[2]) } };
+    return { s: { c: decode_col(whole[1]), r: 0 }, e: { c: decode_col(whole[2]), r: MAX_ROW } };
+  }
   const idx = rangeStr.indexOf(':');
   if (idx === -1) {
     const pt = decode_cell(rangeStr);
@@ -87,12 +99,34 @@ export function quoteSheetName(name: string): string {
     : `'${name.replace(/'/g, "''")}'`;
 }
 
-/** Absolute reference like 'Sheet 1'!$A$1:$C$9. */
+/** Whole-column ('A:C') or whole-row ('2:5') form of a range, if it spans the grid; else undefined. */
+export function wholeRangeRef(range: Range, absolute = false): string | undefined {
+  const $ = absolute ? '$' : '';
+  if (range.s.r === 0 && range.e.r === MAX_ROW) return `${$}${encode_col(range.s.c)}:${$}${encode_col(range.e.c)}`;
+  if (range.s.c === 0 && range.e.c === MAX_COL) return `${$}${range.s.r + 1}:${$}${range.e.r + 1}`;
+  return undefined;
+}
+
+/** encode_range that keeps whole-column / whole-row ranges compact ('A:B'). */
+export function encodeRangeCompact(range: Range): string {
+  return wholeRangeRef(range) ?? encode_range(range);
+}
+
+/** Absolute reference like 'Sheet 1'!$A$1:$C$9 (or 'Sheet 1'!$A:$C for whole columns). */
 export function absoluteRef(sheet: string, range: Range): string {
+  const whole = wholeRangeRef(range, true);
+  if (whole) return `${quoteSheetName(sheet)}!${whole}`;
   const cell = (a: CellAddress) => `$${encode_col(a.c)}$${a.r + 1}`;
   const s = cell(range.s);
   const e = cell(range.e);
   return `${quoteSheetName(sheet)}!${s === e ? s : `${s}:${e}`}`;
+}
+
+/** Intersection of a range with another (e.g. clamp a whole column to a sheet's used range). */
+export function intersectRange(a: Range, b: Range): Range | undefined {
+  const s = { r: Math.max(a.s.r, b.s.r), c: Math.max(a.s.c, b.s.c) };
+  const e = { r: Math.min(a.e.r, b.e.r), c: Math.min(a.e.c, b.e.c) };
+  return s.r <= e.r && s.c <= e.c ? { s, e } : undefined;
 }
 
 /**

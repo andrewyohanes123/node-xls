@@ -31,11 +31,11 @@ export const ERROR_VALUES: Readonly<Record<string, number>> = Object.freeze(
   Object.fromEntries(Object.entries(ERROR_CODES).map(([k, v]) => [v, Number(k)]))
 );
 
-/** Error text for a cell value (numeric code or string). */
+/** Error text for a cell value (numeric code or string); newer errors (#SPILL!, #CALC!, ...) pass through. */
 export function errorText(v: unknown): string {
   if (typeof v === 'number') return ERROR_CODES[v] ?? '#N/A';
   const s = String(v ?? '');
-  return ERROR_VALUES[s] !== undefined ? s : '#N/A';
+  return ERROR_VALUES[s] !== undefined || /^#[A-Z0-9/_.]+[!?]?$/i.test(s) ? s : '#N/A';
 }
 
 /** Returns the built-in id for a format code, if it is one. */
@@ -43,10 +43,33 @@ export function builtinFormatId(code: string): number | undefined {
   return code.toLowerCase() === 'general' ? 0 : BUILTIN_IDS.get(code);
 }
 
+/** Built-in ids without a fixed code (locale / CJK variants) and their equivalents (as SheetJS). */
+const BUILTIN_EQUIVALENTS: Readonly<Record<number, number>> = {
+  5: 37, 6: 38, 7: 39, 8: 40, 23: 0, 24: 0, 25: 0, 26: 0, 27: 14, 28: 14, 29: 14, 30: 14, 31: 14,
+  50: 14, 51: 14, 52: 14, 53: 14, 54: 14, 55: 14, 56: 14, 57: 14, 58: 14, 59: 1, 60: 2, 61: 3, 62: 4,
+  67: 9, 68: 10, 69: 12, 70: 13, 71: 14, 72: 14, 73: 15, 74: 16, 75: 17, 76: 20, 77: 21, 78: 22,
+  79: 45, 80: 46, 81: 47, 82: 0,
+};
+const BUILTIN_CURRENCY: Readonly<Record<number, string>> = {
+  5: '"$"#,##0_);\\("$"#,##0\\)',
+  6: '"$"#,##0_);[Red]\\("$"#,##0\\)',
+  7: '"$"#,##0.00_);\\("$"#,##0.00\\)',
+  8: '"$"#,##0.00_);[Red]\\("$"#,##0.00\\)',
+  41: '_(* #,##0_);_(* \\(#,##0\\);_(* "-"_);_(@_)',
+  42: '_("$"* #,##0_);_("$"* \\(#,##0\\);_("$"* "-"_);_(@_)',
+  43: '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)',
+  44: '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)',
+};
+
+/** Format code for a built-in id (including ids Excel resolves per locale), or undefined. */
+export function builtinFormatCode(id: number): string | undefined {
+  return BUILTIN_FORMATS[id] ?? BUILTIN_FORMATS[BUILTIN_EQUIVALENTS[id]] ?? BUILTIN_CURRENCY[id];
+}
+
 /** Resolves a format id or code to a format code. */
 export function resolveFormat(fmt: string | number | undefined | null): string {
   if (fmt === undefined || fmt === null) return 'General';
-  if (typeof fmt === 'number') return BUILTIN_FORMATS[fmt] ?? 'General';
+  if (typeof fmt === 'number') return builtinFormatCode(fmt) ?? 'General';
   return fmt;
 }
 
@@ -71,7 +94,7 @@ export function formatValue(fmt: string | number | undefined | null, value: unkn
 }
 
 /** SheetJS-compatible format_cell: the display text of a cell. */
-export function format_cell(cell: CellObject | undefined | null, v?: unknown, opts?: { dateNF?: string }): string {
+export function format_cell(cell: CellObject | undefined | null, v?: unknown, opts?: { dateNF?: string; date1904?: boolean }): string {
   if (!cell || cell.t === undefined || cell.t === 'z') return '';
   if (cell.w !== undefined) return cell.w;
   if (cell.t === 'e') return errorText(cell.v);
@@ -81,5 +104,5 @@ export function format_cell(cell: CellObject | undefined | null, v?: unknown, op
   if (cell.t === 's' && cell.z === undefined) return String(value);
   let fmt = cell.z ?? cell.s?.numFmt;
   if (cell.t === 'd' && fmt === undefined) fmt = opts?.dateNF ?? 14;
-  return formatValue(fmt, value);
+  return formatValue(fmt, value, { date1904: opts?.date1904 });
 }

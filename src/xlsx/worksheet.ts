@@ -278,7 +278,9 @@ function sheetViewsXml(ctx: WriteContext, ws: WorkSheet, index: number): string 
 
 function mergeCellsXml(merges: Range[] | undefined): string {
   if (!merges || merges.length === 0) return '';
-  const norm = merges.map((m) => (typeof m === 'string' ? decode_range(m) : m));
+  // single-cell merges are no-ops that Excel may flag; drop them
+  const norm = merges.map((m) => (typeof m === 'string' ? decode_range(m) : m)).filter((m) => m.s.r !== m.e.r || m.s.c !== m.e.c);
+  if (norm.length === 0) return '';
   for (let i = 0; i < norm.length; i++) {
     for (let j = i + 1; j < norm.length; j++) {
       const a = norm[i];
@@ -336,7 +338,7 @@ export function writeWorksheet(ctx: WriteContext, sheetName: string, ws: WorkShe
   // sheetPr
   const tabColor = colorAttrs(ws['!tabColor']);
   const setup = ws['!pageSetup'];
-  const fitToPage = setup && (setup.fitToWidth !== undefined || setup.fitToHeight !== undefined);
+  const fitToPage = setup && (setup.fitToPage ?? (setup.fitToWidth !== undefined || setup.fitToHeight !== undefined));
   if (tabColor || fitToPage) {
     sections.sheetPr = `<sheetPr>${tabColor ? `<tabColor${attrs(tabColor)}/>` : ''}${fitToPage ? '<pageSetUpPr fitToPage="1"/>' : ''}</sheetPr>`;
   }
@@ -426,7 +428,7 @@ export function writeWorksheet(ctx: WriteContext, sheetName: string, ws: WorkShe
 
   if (comments.length) {
     comments.sort((a, b) => a.addr.r - b.addr.r || a.addr.c - b.addr.c);
-    sections.legacyDrawing = writeComments(comments, ctx.pkg, part, ++ctx.seq.comments);
+    sections.legacyDrawing = writeComments(ctx, comments, part);
   }
 
   const tables = writeTables(ctx, ws, sheetName, part);

@@ -29,6 +29,7 @@ const SCHEMA_BY_CONTENT_TYPE: Array<[RegExp, string]> = [
     /spreadsheetml\.(sheet\.main|worksheet|styles|sharedStrings|pivotTable|pivotCacheDefinition|pivotCacheRecords|table|comments)\+xml$/,
     'sml.xsd',
   ],
+  [/ms-excel\.sheet\.macroEnabled\.main\+xml$/, 'sml.xsd'],
   [/drawingml\.chart\+xml$/, 'dml-chart.xsd'],
   [/officedocument\.drawing\+xml$/, 'dml-spreadsheetDrawing.xsd'],
   [/extended-properties\+xml$/, 'shared-documentPropertiesExtended.xsd'],

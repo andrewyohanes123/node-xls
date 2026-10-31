@@ -1,7 +1,8 @@
+import { XML_READ_OPTIONS } from '../xlsx/xml.js';
 import { XMLParser } from 'fast-xml-parser';
 import { CellStyle, Font, Fill, Border, BorderSide, Alignment, Color, CFStyle, CellProtection } from '../types.js';
 import { denormalizeColor } from './index.js';
-import { BUILTIN_FORMATS } from '../utils/format.js';
+import { BUILTIN_FORMATS, builtinFormatCode } from '../utils/format.js';
 
 export interface ParsedStyles {
   /** cellXfs as CellStyle objects (index = `s` attribute). */
@@ -13,10 +14,7 @@ export interface ParsedStyles {
 }
 
 export const styleParser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  parseTagValue: false,
-  trimValues: false,
+  ...XML_READ_OPTIONS,
   isArray: (name) => ['font', 'fill', 'border', 'xf', 'numFmt', 'dxf'].includes(name),
 });
 
@@ -151,13 +149,14 @@ export function parseStyles(xml: string): ParsedStyles {
     if (fillId > 1 && fills[fillId] && fills[fillId].patternType && fills[fillId].patternType !== 'none') style.fill = fills[fillId];
     if (borderId > 0 && borders[borderId] && !isEmpty(borders[borderId])) style.border = borders[borderId];
     const fmt = numFmtId > 0 ? numFmts[numFmtId] : undefined;
+    // ids such as 58 (CJK date) have no code in the file: keep the id, format via its equivalent
     if (numFmtId > 0) style.numFmt = fmt ?? numFmtId;
     const alignment = parseAlignment(xf.alignment);
     if (alignment) style.alignment = alignment;
     const protection = parseProtection(xf.protection);
     if (protection) style.protection = protection;
     cellStyles.push(style);
-    cellFormats.push(fmt);
+    cellFormats.push(fmt ?? (numFmtId > 0 ? builtinFormatCode(numFmtId) : undefined));
   }
 
   const dxfs: CFStyle[] = (styleSheet.dxfs?.dxf || []).map((d: any) => {

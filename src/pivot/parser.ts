@@ -1,13 +1,11 @@
+import { XML_READ_OPTIONS } from '../xlsx/xml.js';
 import { XMLParser } from 'fast-xml-parser';
 import { PivotTableDefinition, PivotDataField, PivotSubtotal, PivotFilter } from '../types.js';
 import { decode_range } from '../utils/address.js';
 import { unescapeXml } from '../xlsx/xml.js';
 
 const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  parseTagValue: false,
-  trimValues: false,
+  ...XML_READ_OPTIONS,
   isArray: (name) => ['field', 'cacheField', 'dataField', 'pivotField', 'pageField', 'item'].includes(name),
 });
 
@@ -16,10 +14,10 @@ type Shared = Array<string | number | boolean | null>;
 /** Shared items of every cache field, in document order (types are interleaved, so parse by regex). */
 function sharedItems(cacheXml: string): Shared[] {
   const out: Shared[] = [];
-  for (const field of cacheXml.matchAll(/<cacheField\b[^>]*?(?:\/>|>([\s\S]*?)<\/cacheField>)/g)) {
+  for (const field of cacheXml.matchAll(/<(?:[\w.-]+:)?cacheField\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?cacheField>)/g)) {
     const items: Shared = [];
-    const body = /<sharedItems\b[^>]*>([\s\S]*?)<\/sharedItems>/.exec(field[1] ?? '')?.[1] ?? '';
-    for (const m of body.matchAll(/<(s|n|b|d|m|e)\b(?:\s+v="([^"]*)")?[^>]*\/?>/g)) {
+    const body = /<(?:[\w.-]+:)?sharedItems\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?sharedItems>/.exec(field[1] ?? '')?.[1] ?? '';
+    for (const m of body.matchAll(/<(?:[\w.-]+:)?(s|n|b|d|m|e)\b(?:\s+v="([^"]*)")?[^>]*\/?>/g)) {
       const v = m[2] === undefined ? undefined : unescapeXml(m[2]);
       if (m[1] === 'm') items.push(null);
       else if (m[1] === 'n') items.push(Number(v));
@@ -81,6 +79,7 @@ export function parsePivotTableXml(pivotXml: string, cacheDefXml: string, target
     name: pivot['@_name'] || 'PivotTable',
     sourceSheet: ws['@_sheet'] || '',
     sourceRange: decode_range(ws['@_ref'] || 'A1'),
+    ...(ws['@_name'] && !ws['@_sheet'] ? { sourceName: ws['@_name'] } : {}),
     targetSheet: targetSheetName,
     targetCell,
     targetRange,

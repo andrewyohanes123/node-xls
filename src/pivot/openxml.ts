@@ -10,7 +10,7 @@
  */
 import { PivotTableDefinition, WorkSheet } from '../types.js';
 import { escapeAttr, XML_HEADER, NS } from '../xlsx/xml.js';
-import { encode_range } from '../utils/address.js';
+import { encode_range, wholeRangeRef } from '../utils/address.js';
 import { StyleBuilder } from '../styles/index.js';
 import { readSource, PivotValue, SourceData } from './source.js';
 import { AxisEntry, PivotLayout, buildLayout, itemKey } from './layout.js';
@@ -121,7 +121,7 @@ export function generateOpenXmlPivotParts(
     .join('');
   const cacheDefinitionXml =
     `${XML_HEADER}<pivotCacheDefinition xmlns="${NS.main}" xmlns:r="${NS.r}" r:id="${recordsRid}" refreshOnLoad="1" createdVersion="3" refreshedVersion="3" minRefreshableVersion="3" recordCount="${records.length}">` +
-    `<cacheSource type="worksheet"><worksheetSource ref="${encode_range(source.range)}" sheet="${escapeAttr(pivot.sourceSheet)}"/></cacheSource>` +
+    `<cacheSource type="worksheet"><worksheetSource ref="${wholeRangeRef(pivot.sourceRange) ?? encode_range(source.range)}" sheet="${escapeAttr(pivot.sourceSheet)}"/></cacheSource>` +
     `<cacheFields count="${fields.length}">${cacheFields}</cacheFields></pivotCacheDefinition>`;
 
   const dateFields = fields.map((_, f) => isDateField(source, f));

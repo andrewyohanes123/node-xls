@@ -1,3 +1,4 @@
+import { XML_READ_OPTIONS } from '../xlsx/xml.js';
 /**
  * Reads images (and chart references) from a sheet drawing part.
  */
@@ -7,16 +8,11 @@ import { SheetImage, WorkSheet } from '../types.js';
 import { encode_cell } from '../utils/address.js';
 import { EMU_PER_PIXEL } from '../utils/units.js';
 import { readRels } from '../xlsx/rels.js';
-import { REL_TYPES } from '../xlsx/xml.js';
-import { detectImageType } from './image.js';
+import { detectImageType, imageTypeFromExtension } from './image.js';
 import { readChartPart } from '../charts/read.js';
 
 const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  parseTagValue: false,
-  trimValues: false,
-  removeNSPrefix: true,
+  ...XML_READ_OPTIONS,
   isArray: (n) => ['twoCellAnchor', 'oneCellAnchor', 'absoluteAnchor', 'pic', 'graphicFrame'].includes(n),
 });
 
@@ -47,11 +43,13 @@ export function readDrawing(files: Record<string, Uint8Array>, part: string, ws:
       const rel = rid ? rels.get(rid) : undefined;
       const data = rel && !rel.external ? files[rel.target] : undefined;
       if (!data) continue;
+      const type = detectImageType(data) ?? imageTypeFromExtension(rel!.target);
+      if (!type) continue; // e.g. SVG-only pictures: not representable, skipped rather than breaking a re-write
       const ext = pic.spPr?.xfrm?.ext;
       const size = ext ? { width: px(ext['@_cx']), height: px(ext['@_cy']) } : anchor.ext ? { width: px(anchor.ext['@_cx']), height: px(anchor.ext['@_cy']) } : undefined;
       const img: SheetImage = {
         data,
-        type: detectImageType(data),
+        type,
         anchor: size ? { ...base, ...size } : { ...base, to: encode_cell({ c: to?.c ?? from.c + 1, r: to?.r ?? from.r + 1 }) },
       };
       const nv = pic.nvPicPr?.cNvPr;
@@ -63,7 +61,7 @@ export function readDrawing(files: Record<string, Uint8Array>, part: string, ws:
     for (const frame of anchor.graphicFrame ?? []) {
       const rid = frame.graphic?.graphicData?.chart?.['@_id'];
       const rel = rid ? rels.get(rid) : undefined;
-      if (!rel || rel.type !== REL_TYPES.chart) continue;
+      if (!rel || !rel.type.endsWith('/chart')) continue;
       const xfrm = frame.xfrm?.ext;
       const size = to
         ? { to: encode_cell({ c: to.c, r: to.r }) }

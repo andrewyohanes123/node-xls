@@ -1,3 +1,4 @@
+import { XML_READ_OPTIONS } from '../xlsx/xml.js';
 /**
  * Parses a chart part into a SheetChart (type, grouping, title, series
  * references, legend, axes options). Formatting beyond series colors is not
@@ -8,11 +9,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { ChartAxisOptions, ChartSeries, Color, DrawingAnchor, SheetChart } from '../types.js';
 
 const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  parseTagValue: false,
-  trimValues: false,
-  removeNSPrefix: true,
+  ...XML_READ_OPTIONS,
   isArray: (n) => ['ser', 'p', 'r', 'catAx', 'valAx', 'dateAx'].includes(n),
 });
 
@@ -38,9 +35,20 @@ function colorOf(spPr: any): Color | undefined {
   return undefined;
 }
 
-function refOf(node: any): string | undefined {
+/** Series data: a range reference, or the literal points of numLit/strLit. */
+function refOf(node: any): string | Array<string | number> | undefined {
   const f = node?.numRef?.f ?? node?.strRef?.f;
-  return f === undefined ? undefined : typeof f === 'object' ? f['#text'] : String(f);
+  if (f !== undefined) return typeof f === 'object' ? f['#text'] : String(f);
+  const lit = node?.numLit ?? node?.strLit;
+  if (!lit) return undefined;
+  const count = Number(val(lit.ptCount) ?? 0);
+  const out: Array<string | number> = Array.from({ length: count }, () => (node.numLit ? NaN : ''));
+  for (const pt of [].concat(lit.pt ?? [])) {
+    const raw = (pt as any).v;
+    const text = typeof raw === 'object' ? (raw['#text'] ?? '') : String(raw ?? '');
+    out[Number((pt as any)['@_idx'] ?? 0)] = node.numLit ? Number(text) : text;
+  }
+  return out;
 }
 
 function axisOf(ax: any): ChartAxisOptions | undefined {
@@ -81,7 +89,8 @@ export function readChartPart(files: Record<string, Uint8Array>, part: string, a
   if (type === 'column' && val(node.barDir) === 'bar') type = 'bar';
 
   const series: ChartSeries[] = (node.ser ?? []).map((s: any) => {
-    const out: ChartSeries = { values: refOf(type === 'scatter' ? s.yVal : s.val) ?? '' };
+    const values = refOf(type === 'scatter' ? s.yVal : s.val);
+    const out: ChartSeries = { values: Array.isArray(values) ? values.map(Number) : (values ?? '') };
     const name = s.tx?.strRef?.f ?? s.tx?.v;
     if (name !== undefined) out.name = typeof name === 'object' ? name['#text'] : String(name);
     const cat = refOf(type === 'scatter' ? s.xVal : s.cat);

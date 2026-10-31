@@ -112,6 +112,7 @@ export function write(wb: WorkBook, opts?: WritingOptions): any {
       return encodeText(JSON.stringify(out, null, 2), opts?.type);
     }
     case 'xlsx':
+    case 'xlsm':
       return convertOutputType(writeXlsxSync(wb, opts), opts?.type);
     default:
       throw new Error(`Unsupported bookType ${bookType}`);
@@ -119,7 +120,8 @@ export function write(wb: WorkBook, opts?: WritingOptions): any {
 }
 
 export async function writeAsync(wb: WorkBook, opts?: WritingOptions): Promise<any> {
-  if ((opts?.bookType || 'xlsx') !== 'xlsx') return write(wb, opts);
+  const bt = opts?.bookType || 'xlsx';
+  if (bt !== 'xlsx' && bt !== 'xlsm') return write(wb, opts);
   return convertOutputType(await writeXlsxAsync(wb, opts), opts?.type);
 }
 
@@ -130,7 +132,8 @@ function bookTypeFor(filename: string, explicit?: BookType): BookType {
   if (ext === '.txt' || ext === '.tsv') return 'txt';
   if (ext === '.html' || ext === '.htm') return 'html';
   if (ext === '.json') return 'json';
-  if (ext === '' || ext === '.xlsx' || ext === '.xlsm') return 'xlsx';
+  if (ext === '' || ext === '.xlsx') return 'xlsx';
+  if (ext === '.xlsm') return 'xlsm';
   throw new Error(`Unsupported file extension "${ext}" (node-xls writes .xlsx, .csv, .txt, .html, .json)`);
 }
 

@@ -7,11 +7,11 @@
  */
 import { CellObject, Range, TableDefinition, TableTotalsFunction, WorkSheet } from '../types.js';
 import { WriteContext } from '../xlsx/context.js';
-import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, attrs } from '../xlsx/xml.js';
+import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, attrs, escapeXml } from '../xlsx/xml.js';
 import { decode_range, encode_cell, encode_range } from '../utils/address.js';
 import { format_cell } from '../utils/format.js';
 
-const SUBTOTAL_CODES: Record<Exclude<TableTotalsFunction, 'none'>, number> = {
+const SUBTOTAL_CODES: Record<Exclude<TableTotalsFunction, 'none' | 'custom'>, number> = {
   average: 101,
   countNums: 102,
   count: 103,
@@ -53,7 +53,7 @@ function resolve(ws: WorkSheet, def: TableDefinition): ResolvedTable {
       const text = cell ? format_cell(cell) : '';
       name = text.trim() === '' ? undefined : text;
     }
-    const base = (name ?? `Column${i + 1}`).replace(/[\r\n]+/g, ' ');
+    const base = name ?? `Column${i + 1}`;
     let candidate = base;
     for (let n = 2; seen.has(candidate.toLowerCase()); n++) candidate = `${base}${n}`;
     seen.add(candidate.toLowerCase());
@@ -79,7 +79,10 @@ export function tableCellOverrides(ws: WorkSheet): Map<string, CellObject> {
         if (!col) return;
         const ref = encode_cell({ c: range.s.c + i, r: range.e.r });
         const cell = ws[ref] as CellObject | undefined;
-        if (col.totalsRowFunction && col.totalsRowFunction !== 'none') {
+        if (col.totalsRowFunction === 'custom') {
+          if (!col.totalsRowFormula) throw new Error(`Table ${def.name}: column ${names[i]} has totalsRowFunction "custom" but no totalsRowFormula`);
+          out.set(ref, { t: 'n', f: col.totalsRowFormula.replace(/^=/, ''), s: cell?.s, c: cell?.c, l: cell?.l });
+        } else if (col.totalsRowFunction && col.totalsRowFunction !== 'none') {
           const code = SUBTOTAL_CODES[col.totalsRowFunction];
           out.set(ref, { t: 'n', f: `SUBTOTAL(${code},${def.name}[${escapeStructuredName(names[i])}])`, s: cell?.s, c: cell?.c, l: cell?.l });
         } else if (col.totalsRowLabel !== undefined && !cell) {
@@ -129,12 +132,17 @@ export function writeTables(ctx: WriteContext, ws: WorkSheet, sheetName: string,
       .map((name, i) => {
         const col = def.columns?.[i];
         const fn = col?.totalsRowFunction && col.totalsRowFunction !== 'none' ? col.totalsRowFunction : undefined;
-        return `<tableColumn${attrs([
+        const children =
+          (col?.calculatedColumnFormula ? `<calculatedColumnFormula>${escapeXml(col.calculatedColumnFormula.replace(/^=/, ''))}</calculatedColumnFormula>` : '') +
+          (def.totalsRow && fn === 'custom' && col?.totalsRowFormula ? `<totalsRowFormula>${escapeXml(col.totalsRowFormula.replace(/^=/, ''))}</totalsRowFormula>` : '');
+        const a = attrs([
           ['id', i + 1],
-          ['name', name],
+          // column names are ST_Xstring: line breaks are stored as _x000a_ (as Excel does)
+          ['name', name.replace(/_(x[0-9A-Fa-f]{4}_)/g, '_x005F_$1').replace(/\n/g, '_x000a_').replace(/\r/g, '_x000d_')],
           ['totalsRowFunction', def.totalsRow ? fn : undefined],
           ['totalsRowLabel', def.totalsRow && !fn ? col?.totalsRowLabel : undefined],
-        ])}/>`;
+        ]);
+        return children ? `<tableColumn${a}>${children}</tableColumn>` : `<tableColumn${a}/>`;
       })
       .join('');
     const styleInfo = `<tableStyleInfo${attrs([

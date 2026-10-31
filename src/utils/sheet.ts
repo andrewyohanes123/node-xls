@@ -53,9 +53,9 @@ export function create_cell(val: any, opts?: AOA2SheetOpts): CellObject | undefi
   if (v instanceof Date) {
     if (!isValidDate(v)) return { ...cell, t: 'e', v: 0x0f };
     const z = opts?.dateNF || DEFAULT_DATE_FORMAT;
-    const serial = dateToSerial(v, { utc: opts?.UTC });
-    const w = formatValue(z, serial);
-    if (opts?.cellDates) return { ...cell, t: 'd', v: opts?.UTC ? serialToDate(serial) : v, z, w };
+    const serial = dateToSerial(v, { utc: opts?.UTC, date1904: opts?.date1904 });
+    const w = formatValue(z, serial, { date1904: opts?.date1904 });
+    if (opts?.cellDates) return { ...cell, t: 'd', v: opts?.UTC ? serialToDate(serial, { date1904: opts?.date1904 }) : v, z, w };
     return { ...cell, t: 'n', v: serial, z, w };
   }
   return { ...cell, t: 's', v: String(v) };
@@ -148,7 +148,7 @@ export function sheet_add_json<T = any>(ws: WorkSheet, data: T[], opts?: JSON2Sh
         if (opts?.cellDates) t = 'd';
         else {
           t = 'n';
-          value = dateToSerial(v, { utc: opts?.UTC });
+          value = dateToSerial(v, { utc: opts?.UTC, date1904: opts?.date1904 });
         }
       } else if (v === null && opts?.nullError) {
         t = 'e';
@@ -211,7 +211,8 @@ export function sheet_to_json<T = any>(ws: WorkSheet, opts?: Sheet2JSONOpts): T[
         hdr[C] = (o.header as string[])[C - r.s.c];
         break;
       default: {
-        const name = cell == null ? '__EMPTY' : format_cell(cell, undefined, o);
+        // styled blanks read from files are stub cells; treat them like missing cells (as SheetJS sees them)
+        const name = cell == null || (cell.t === 'z' && cell.v == null) ? '__EMPTY' : format_cell(cell, undefined, o);
         let candidate = name;
         let counter = seen[name] || 0;
         if (!counter) seen[name] = 1;

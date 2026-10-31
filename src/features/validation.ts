@@ -22,6 +22,10 @@ export function dataValidationsXml(list: DataValidation[], ctx: WriteContext): s
     let f1: string | undefined;
     let f2: string | undefined;
     if (dv.type === 'list' && dv.values) {
+      const withComma = dv.values.find((v) => String(v).includes(','));
+      if (withComma !== undefined) {
+        throw new Error(`Inline list value "${withComma}" contains a comma, which Excel treats as a separator; put the values in cells and use formula1 with a range`);
+      }
       const joined = dv.values.map((v) => String(v).replace(/"/g, '""')).join(',');
       if (joined.length > 255) {
         throw new Error('Inline list validation exceeds 255 characters; put the values in cells and use formula1 with a range');

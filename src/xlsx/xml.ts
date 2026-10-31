@@ -9,6 +9,21 @@
 
 export const XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 
+/**
+ * fast-xml-parser options for every reader: keep text verbatim (no number /
+ * boolean coercion, no trimming), ignore namespace prefixes (x:worksheet ==
+ * worksheet), and decode numeric character references (&#10;).
+ * Note: with removeNSPrefix, prefixed attributes lose their prefix (r:id -> id).
+ */
+export const XML_READ_OPTIONS = {
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  parseTagValue: false,
+  trimValues: false,
+  removeNSPrefix: true,
+  htmlEntities: true,
+} as const;
+
 export const NS = {
   main: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
   r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
@@ -45,6 +60,7 @@ export const CONTENT_TYPES = {
   rels: 'application/vnd.openxmlformats-package.relationships+xml',
   xml: 'application/xml',
   workbook: `${CT}.spreadsheetml.sheet.main+xml`,
+  workbookMacro: 'application/vnd.ms-excel.sheet.macroEnabled.main+xml',
   worksheet: `${CT}.spreadsheetml.worksheet+xml`,
   styles: `${CT}.spreadsheetml.styles+xml`,
   sharedStrings: `${CT}.spreadsheetml.sharedStrings+xml`,

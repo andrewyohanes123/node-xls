@@ -7,6 +7,7 @@ import { encode_cell, encode_range } from './address.js';
 import { book_new, book_append_sheet } from './book.js';
 import { cssToStyle } from '../styles/css.js';
 import { ERROR_VALUES } from './format.js';
+import { parsePlainNumber } from '../csv/index.js';
 
 export interface Table2SheetOpts {
   /** Keep every value as text (no number detection). */
@@ -77,8 +78,7 @@ export function table_to_sheet(table: string | any, opts?: Table2SheetOpts): Wor
       else {
         const trimmed = text.trim();
         if (trimmed === '') Object.assign(cell, { t: 'z' });
-        else if (!opts?.raw && trimmed !== '' && Number.isFinite(Number(trimmed)) && String(Number(trimmed)) === trimmed)
-          Object.assign(cell, { t: 'n', v: Number(trimmed) });
+        else if (!opts?.raw && parsePlainNumber(trimmed) !== undefined) Object.assign(cell, { t: 'n', v: parsePlainNumber(trimmed) });
         else Object.assign(cell, { t: 's', v: text.replace(/^\s+|\s+$/g, '') });
       }
       if (a['data-z']) cell.z = a['data-z'];

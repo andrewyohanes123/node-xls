@@ -46,6 +46,18 @@ function detectSeparator(text: string): string {
   return counts[0][1] > 0 ? counts[0][0] : ',';
 }
 
+/**
+ * Plain decimal numbers ("1.50", "-3", "1e3", ".5"). Codes with leading zeros
+ * ("007"), hex and thousands separators stay text (SheetJS converts them).
+ */
+export function parsePlainNumber(s: string): number | undefined {
+  const t = s.trim();
+  if (!/^[+-]?(?:(?:0|[1-9]\d*)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(t)) return undefined;
+  const n = Number(t);
+  if (!Number.isFinite(n)) return undefined;
+  return n === 0 ? 0 : n;
+}
+
 export function readCsv(data: string, opts?: ParsingOptions): WorkBook {
   const text = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
   const fs = opts?.FS || detectSeparator(text);
@@ -59,9 +71,7 @@ export function readCsv(data: string, opts?: ParsingOptions): WorkBook {
       const upper = trimmed.toUpperCase();
       if (upper === 'TRUE') return true;
       if (upper === 'FALSE') return false;
-      const num = Number(trimmed);
-      if (Number.isFinite(num) && String(num) === trimmed) return num;
-      return val;
+      return parsePlainNumber(trimmed) ?? val;
     })
   );
   const wb = book_new();

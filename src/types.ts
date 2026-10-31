@@ -239,6 +239,8 @@ export interface PageSetup {
   fitToWidth?: number;
   /** Fit to N pages tall (0 = automatic). Enables fit-to-page. */
   fitToHeight?: number;
+  /** Scale to fit (default: on when fitToWidth/fitToHeight are given). */
+  fitToPage?: boolean;
 }
 
 /**
@@ -342,6 +344,8 @@ export type CFIconSet =
 
 interface CFBase {
   stopIfTrue?: boolean;
+  /** Evaluation order across the sheet (1 = first). Rules without one follow, in order. */
+  priority?: number;
 }
 
 /** Differential style applied by a rule (font, fill, border, numFmt). */
@@ -364,9 +368,9 @@ export type ConditionalFormatRule =
       style: CFStyle;
     })
   | (CFBase & { type: 'timePeriod'; timePeriod: CFTimePeriod; style: CFStyle })
-  | { type: 'colorScale'; cfvo: CFValue[]; colors: Color[] }
-  | { type: 'dataBar'; color: Color; min?: CFValue; max?: CFValue; showValue?: boolean }
-  | { type: 'iconSet'; iconSet: CFIconSet; cfvo?: CFValue[]; reverse?: boolean; showValue?: boolean };
+  | { type: 'colorScale'; cfvo: CFValue[]; colors: Color[]; priority?: number }
+  | { type: 'dataBar'; color: Color; min?: CFValue; max?: CFValue; showValue?: boolean; priority?: number }
+  | { type: 'iconSet'; iconSet: CFIconSet; cfvo?: CFValue[]; reverse?: boolean; showValue?: boolean; priority?: number };
 
 export interface ConditionalFormat {
   /** Target range(s), e.g. 'B2:B20' or 'A1:A5 C1:C5'. */
@@ -397,13 +401,17 @@ export interface DataValidation {
 
 // --- Excel tables -----------------------------------------------------------
 
-export type TableTotalsFunction = 'none' | 'sum' | 'average' | 'count' | 'countNums' | 'max' | 'min' | 'stdDev' | 'var';
+export type TableTotalsFunction = 'none' | 'sum' | 'average' | 'count' | 'countNums' | 'max' | 'min' | 'stdDev' | 'var' | 'custom';
 
 export interface TableColumn {
   /** Defaults to the header cell text. */
   name?: string;
   totalsRowFunction?: TableTotalsFunction;
+  /** Formula for totalsRowFunction 'custom' (no leading '='). */
+  totalsRowFormula?: string;
   totalsRowLabel?: string;
+  /** Calculated-column formula Excel applies to new rows (cells still need their own formulas). */
+  calculatedColumnFormula?: string;
 }
 
 export interface TableDefinition {
@@ -430,7 +438,7 @@ export interface TableDefinition {
 
 // --- Images & charts ----------------------------------------------------------
 
-export type ImageType = 'png' | 'jpeg' | 'gif';
+export type ImageType = 'png' | 'jpeg' | 'gif' | 'bmp' | 'tiff' | 'emf' | 'wmf';
 
 export interface DrawingAnchor {
   /** Top-left cell (e.g. 'B2'). */
@@ -461,10 +469,10 @@ export type ChartType = 'column' | 'bar' | 'line' | 'area' | 'pie' | 'doughnut' 
 export interface ChartSeries {
   /** Series name: literal text or a cell reference ("'Data'!$B$1"). */
   name?: string;
-  /** Category (x) range, e.g. "'Data'!$A$2:$A$6" or "Data!A2:A6". */
-  categories?: string;
-  /** Value (y) range. */
-  values: string;
+  /** Category (x) range, e.g. "'Data'!$A$2:$A$6" or "Data!A2:A6", or literal values. */
+  categories?: string | Array<string | number>;
+  /** Value (y) range, or literal numbers. */
+  values: string | number[];
   color?: Color;
   /** Line/scatter: show markers (default true for scatter, false for line). */
   marker?: boolean;
@@ -553,6 +561,8 @@ export interface PivotTableDefinition {
   renderCells?: boolean;
   /** Optional caption written above the pivot (outside the pivot area). */
   title?: string;
+  /** Source given as a table or defined name (as read from a file); resolved to sourceSheet/sourceRange. */
+  sourceName?: string;
 }
 
 export interface PivotTableOptions {
@@ -644,7 +654,7 @@ export interface WorkBook {
   PivotTables?: PivotTableDefinition[];
 }
 
-export type BookType = 'xlsx' | 'csv' | 'txt' | 'html' | 'json';
+export type BookType = 'xlsx' | 'xlsm' | 'csv' | 'txt' | 'html' | 'json';
 export type OutputType = 'base64' | 'binary' | 'buffer' | 'file' | 'array' | 'string';
 
 export interface WritingOptions {
@@ -687,6 +697,8 @@ export interface AOA2SheetOpts {
   nullError?: boolean;
   /** Treat Date values as UTC instead of local time. */
   UTC?: boolean;
+  /** Convert Dates to 1904-system serials (for workbooks with WBProps.date1904). */
+  date1904?: boolean;
   /** Origin cell or row; -1 appends below the existing range. */
   origin?: number | string | CellAddress;
 }

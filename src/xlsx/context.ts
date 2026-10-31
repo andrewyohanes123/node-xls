@@ -14,7 +14,7 @@ export interface WriteContext {
   /** Index of the active (selected) sheet. */
   activeTab: number;
   /** Sequence numbers for numbered parts. */
-  seq: { comments: number; tables: number; drawings: number; charts: number; images: number };
+  seq: { comments: number; tables: number; drawings: number; charts: number; images: number; vmlBlocks: number };
   /** Workbook-wide table names (case-insensitive) and ids. */
   tableNames: Set<string>;
   hasFormulas: boolean;
@@ -33,7 +33,7 @@ export function createContext(wb: WorkBook, opts?: WritingOptions): WriteContext
     sst: new SharedStringsBuilder(),
     date1904: Boolean(wb.Workbook?.WBProps?.date1904),
     activeTab: 0,
-    seq: { comments: 0, tables: 0, drawings: 0, charts: 0, images: 0 },
+    seq: { comments: 0, tables: 0, drawings: 0, charts: 0, images: 0, vmlBlocks: 0 },
     tableNames: new Set(),
     hasFormulas: false,
     autoNames: [],

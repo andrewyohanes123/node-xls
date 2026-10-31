@@ -24,12 +24,12 @@ function mediaPart(ctx: WriteContext, bytes: Uint8Array, ext: string, contentTyp
 function pictureXml(ctx: WriteContext, ws: WorkSheet, img: SheetImage, drawingPart: string, id: number): string {
   const bytes = toBytes(img.data);
   const type = img.type ?? detectImageType(bytes);
-  if (!type) throw new Error('Unsupported image format (use PNG, JPEG or GIF)');
+  if (!type) throw new Error('Unsupported image format (use PNG, JPEG, GIF, BMP, TIFF, EMF or WMF)');
   const detected = detectImageType(bytes);
   if (detected && detected !== type) throw new Error(`Image data is ${detected} but type "${type}" was given`);
   const part = mediaPart(ctx, bytes, IMAGE_EXTENSIONS[type], IMAGE_CONTENT_TYPES[type]);
   const rid = ctx.pkg.addRel(drawingPart, REL_TYPES.image, part);
-  const anchor = resolveAnchor(ws, img.anchor, imageSize(bytes, type));
+  const anchor = resolveAnchor(ws, img.anchor, imageSize(bytes, type) ?? { width: 100, height: 100 });
   const pic =
     '<xdr:pic>' +
     `<xdr:nvPicPr><xdr:cNvPr${attrs([

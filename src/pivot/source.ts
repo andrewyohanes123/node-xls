@@ -3,7 +3,7 @@
  * fields) and typed record values read from a worksheet range.
  */
 import { CellObject, Range, WorkSheet } from '../types.js';
-import { encode_cell } from '../utils/address.js';
+import { decode_range, encode_cell } from '../utils/address.js';
 import { format_cell, isDateFormat } from '../utils/format.js';
 import { dateToSerial } from '../utils/dates.js';
 
@@ -30,7 +30,13 @@ function cellValue(cell: CellObject | undefined): PivotValue {
   return String(cell.v);
 }
 
-export function readSource(ws: WorkSheet, range: Range): SourceData {
+export function readSource(ws: WorkSheet, sourceRange: Range): SourceData {
+  // whole-column sources ('A:D') end at the sheet's used range
+  let range = sourceRange;
+  if (ws['!ref']) {
+    const used = decode_range(ws['!ref']);
+    range = { s: sourceRange.s, e: { r: Math.min(sourceRange.e.r, Math.max(used.e.r, sourceRange.s.r)), c: Math.min(sourceRange.e.c, Math.max(used.e.c, sourceRange.s.c)) } };
+  }
   const fields: string[] = [];
   const seen = new Set<string>();
   for (let c = range.s.c; c <= range.e.c; c++) {

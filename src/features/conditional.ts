@@ -153,12 +153,17 @@ function ruleXml(rule: ConditionalFormatRule, sqref: string, priority: number, s
 }
 
 export function conditionalFormattingXml(list: ConditionalFormat[], styles: StyleBuilder): string {
-  let priority = 0;
-  return list
-    .filter((cf) => cf.rules && cf.rules.length > 0)
-    .map((cf) => {
+  const blocks = list.filter((cf) => cf.rules && cf.rules.length > 0);
+  // Priorities are sheet-wide: rules with an explicit priority come first (in that order),
+  // the rest follow in document order. The result is renumbered 1..n without gaps.
+  const order = blocks
+    .flatMap((cf, b) => cf.rules.map((r, i) => ({ key: `${b}:${i}`, p: r.priority ?? Infinity, seq: b * 1e6 + i })))
+    .sort((a, b) => a.p - b.p || a.seq - b.seq);
+  const priority = new Map(order.map((o, i) => [o.key, i + 1]));
+  return blocks
+    .map((cf, b) => {
       const sqref = cf.ref.replace(/\$/g, '').trim();
-      const rules = cf.rules.map((r) => ruleXml(r, sqref, ++priority, styles)).join('');
+      const rules = cf.rules.map((r, i) => ruleXml(r, sqref, priority.get(`${b}:${i}`)!, styles)).join('');
       return `<conditionalFormatting sqref="${escapeAttr(sqref)}">${rules}</conditionalFormatting>`;
     })
     .join('');

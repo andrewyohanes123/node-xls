@@ -159,7 +159,7 @@ describe('conditional formatting', () => {
     const flatten = (list: any[]) => list.flatMap((c) => c.rules.map((r: any) => r.type));
     expect(flatten(back['!condfmt']!)).toEqual(flatten(ws['!condfmt']));
     const first = back['!condfmt']![0].rules[0] as any;
-    expect(first).toEqual({ type: 'cellIs', operator: 'greaterThan', formulae: [6], style: { font: { bold: true, color: { rgb: '9C0006' } }, fill: { patternType: 'solid', fgColor: { rgb: 'FFC7CE' } } } });
+    expect(first).toEqual({ type: 'cellIs', operator: 'greaterThan', formulae: [6], priority: 1, style: { font: { bold: true, color: { rgb: '9C0006' } }, fill: { patternType: 'solid', fgColor: { rgb: 'FFC7CE' } } } });
     const contains = back['!condfmt']![1].rules[0] as any;
     expect(contains).toMatchObject({ type: 'containsText', text: 'A"l' });
     expect(rep.xml('xl/worksheets/sheet1.xml')).toContain('<formula>NOT(ISERROR(SEARCH(&quot;A&quot;&quot;l&quot;,A2)))</formula>'.replace(/&quot;/g, '"'));
@@ -182,7 +182,7 @@ describe('conditional formatting', () => {
 
 describe('data validation', () => {
   const validations: DataValidation[] = [
-    { ref: 'A2:A5', type: 'list', values: ['Al', 'Bo', 'Cy, Jr.', 'D"i'], prompt: { title: 'Name', message: 'Pick one' } },
+    { ref: 'A2:A5', type: 'list', values: ['Al', 'Bo', 'Cy Jr.', 'D"i'], prompt: { title: 'Name', message: 'Pick one' } },
     { ref: 'B2:B5', type: 'whole', operator: 'between', formula1: 0, formula2: 10, error: { title: 'Oops', message: '0..10 only', style: 'warning' } },
     { ref: 'C2:C5', type: 'date', operator: 'greaterThan', formula1: new Date(2026, 0, 1) },
     { ref: 'D2:D5', type: 'decimal', operator: 'lessThanOrEqual', formula1: 99.5, allowBlank: false },
@@ -198,13 +198,13 @@ describe('data validation', () => {
     ws['!dataValidation'] = validations;
     const { ws: back, rep } = await roundtripSheet(ws);
     const ex = rep.exceljs.getWorksheet('S')!.dataValidations.model as any;
-    expect(ex.A2).toMatchObject({ type: 'list', formulae: ['"Al,Bo,Cy, Jr.,D""i"'], promptTitle: 'Name', prompt: 'Pick one' });
+    expect(ex.A2).toMatchObject({ type: 'list', formulae: ['"Al,Bo,Cy Jr.,D""i"'], promptTitle: 'Name', prompt: 'Pick one' });
     expect(ex.B3).toMatchObject({ type: 'whole', operator: 'between', formulae: [0, 10], errorStyle: 'warning', error: '0..10 only' });
     expect(ex.C2).toMatchObject({ type: 'date', operator: 'greaterThan' });
     expect(ex.D2).toMatchObject({ type: 'decimal', operator: 'lessThanOrEqual' });
     expect(rep.xml('xl/worksheets/sheet1.xml')).toMatch(/<dataValidation type="decimal" operator="lessThanOrEqual" showInputMessage="1"/);
     expect(back['!dataValidation']).toEqual([
-      { ref: 'A2:A5', type: 'list', values: ['Al', 'Bo', 'Cy', ' Jr.', 'D"i'], prompt: { title: 'Name', message: 'Pick one' } },
+      { ref: 'A2:A5', type: 'list', values: ['Al', 'Bo', 'Cy Jr.', 'D"i'], prompt: { title: 'Name', message: 'Pick one' } },
       { ref: 'B2:B5', type: 'whole', formula1: '0', formula2: '10', error: { title: 'Oops', message: '0..10 only', style: 'warning' } },
       { ref: 'C2:C5', type: 'date', formula1: '46023', operator: 'greaterThan' },
       { ref: 'D2:D5', type: 'decimal', formula1: '99.5', operator: 'lessThanOrEqual', allowBlank: false },

@@ -1,3 +1,4 @@
+import { XML_READ_OPTIONS } from './xml.js';
 /**
  * Parsers for worksheet features: conditional formatting, data validation,
  * tables and comments. Their output matches the shapes accepted by the writer
@@ -18,10 +19,7 @@ import { parseColorNode } from '../styles/parser.js';
 import { decodeXstring } from './xml.js';
 
 export const featureParser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  parseTagValue: false,
-  trimValues: false,
+  ...XML_READ_OPTIONS,
   isArray: (name) => ['tableColumn', 'author', 'comment', 'r'].includes(name),
 });
 
@@ -51,7 +49,11 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
       const type = r['@_type'];
       const style: CFStyle = r['@_dxfId'] !== undefined ? (dxfs[Number(r['@_dxfId'])] ?? {}) : {};
       const formulas = asArray(r.formula).map(textOf);
-      const stop = bool(r['@_stopIfTrue']) ? { stopIfTrue: true } : {};
+      const stop = {
+        ...(bool(r['@_stopIfTrue']) ? { stopIfTrue: true } : {}),
+        ...(r['@_priority'] !== undefined ? { priority: Number(r['@_priority']) } : {}),
+      };
+      const prio = r['@_priority'] !== undefined ? { priority: Number(r['@_priority']) } : {};
       switch (type) {
         case 'cellIs':
           rules.push({ type, operator: r['@_operator'], formulae: formulas.map(numOrString), style, ...stop });
@@ -98,7 +100,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
           break;
         case 'colorScale': {
           const cs = r.colorScale ?? {};
-          rules.push({ type, cfvo: asArray(cs.cfvo).map(parseCfvo), colors: asArray(cs.color).map((c) => parseColorNode(c)!).filter(Boolean) });
+          rules.push({ type, cfvo: asArray(cs.cfvo).map(parseCfvo), colors: asArray(cs.color).map((c) => parseColorNode(c)!).filter(Boolean), ...prio });
           break;
         }
         case 'dataBar': {
@@ -110,6 +112,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
             min: cfvo[0],
             max: cfvo[1],
             ...(db['@_showValue'] === '0' ? { showValue: false } : {}),
+            ...prio,
           });
           break;
         }
@@ -121,6 +124,7 @@ export function parseConditionalFormatting(nodes: any[], dxfs: CFStyle[]): Condi
             cfvo: asArray(is.cfvo).map(parseCfvo),
             ...(bool(is['@_reverse']) ? { reverse: true } : {}),
             ...(is['@_showValue'] === '0' ? { showValue: false } : {}),
+            ...prio,
           });
           break;
         }
@@ -174,7 +178,9 @@ export function parseTableXml(xml: string): TableDefinition {
   const columns: TableColumn[] = asArray<any>(t.tableColumns?.tableColumn).map((c) => {
     const col: TableColumn = { name: decodeXstring(c['@_name'] ?? '') };
     if (c['@_totalsRowFunction']) col.totalsRowFunction = c['@_totalsRowFunction'];
+    if (c.totalsRowFormula !== undefined) col.totalsRowFormula = textOf(c.totalsRowFormula);
     if (c['@_totalsRowLabel'] !== undefined) col.totalsRowLabel = c['@_totalsRowLabel'];
+    if (c.calculatedColumnFormula !== undefined) col.calculatedColumnFormula = textOf(c.calculatedColumnFormula);
     return col;
   });
   const si = t.tableStyleInfo ?? {};

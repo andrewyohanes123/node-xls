@@ -69,7 +69,7 @@ XLSX.writeFile(wb, 'report.xlsx');
 
 ```ts
 const wb = XLSX.readFile('in.xlsx', { cellDates: true });
-XLSX.writeFile(wb, 'out.xlsx');                       // format from extension: .xlsx .csv .txt/.tsv .html .json
+XLSX.writeFile(wb, 'out.xlsx');                       // format from extension: .xlsx .xlsm .csv .txt/.tsv .html .json
 
 const buf = XLSX.write(wb, { type: 'buffer' });       // 'buffer' | 'array' | 'base64' | 'binary' | 'string'
 const wb2 = XLSX.read(buf);                            // Buffer, Uint8Array, ArrayBuffer, base64; CSV/HTML text too
@@ -100,7 +100,9 @@ ws.C1 = { t: 'n', f: 'A2*B2' };                // formula without '='; Excel rec
 ws.D1 = { t: 'd', v: new Date(2026, 0, 15) };  // written as a date serial + date format
 ```
 
-**Dates:** like SheetJS, a JS `Date` is read by its **local** calendar fields. So `new Date(2026, 0, 15)` is 15 Jan 2026 in every timezone. Set `UTC: true` in `aoa_to_sheet`/`json_to_sheet` to use the UTC fields instead.
+**Dates:** like SheetJS, a JS `Date` is read by its **local** calendar fields. So `new Date(2026, 0, 15)` is 15 Jan 2026 in every timezone. Set `UTC: true` in `aoa_to_sheet`/`json_to_sheet` to use the UTC fields instead. For 1904-date workbooks (`wb.Workbook.WBProps.date1904`), pass `date1904: true` as well, or keep Dates as `t: 'd'` cells (`cellDates: true`); the writer converts those itself.
+
+**Ranges:** whole columns (`'A:C'`) and whole rows (`'2:5'`) work wherever ranges are accepted, e.g. in conditional formatting, chart series and pivot sources.
 
 ---
 
@@ -191,6 +193,8 @@ ws['!condfmt'] = [
 ];
 ```
 
+Rules are evaluated sheet-wide in order. An explicit `priority` (1 = first) overrides that order, and is preserved when files are read.
+
 Rule types: `cellIs`, `expression`, `containsText`, `notContainsText`, `beginsWith`, `endsWith`, `top10`, `aboveAverage`, `duplicateValues`, `uniqueValues`, `containsBlanks`, `notContainsBlanks`, `containsErrors`, `notContainsErrors`, `timePeriod`, `colorScale`, `dataBar`, `iconSet`.
 
 ## Data validation
@@ -204,7 +208,7 @@ ws['!dataValidation'] = [
 ];
 ```
 
-Types: `list`, `whole`, `decimal`, `date`, `time`, `textLength`, `custom`, `any`. Inline lists are limited to 255 characters (an Excel rule). For longer lists, use a range.
+Types: `list`, `whole`, `decimal`, `date`, `time`, `textLength`, `custom`, `any`. Inline lists are limited to 255 characters and their values cannot contain commas (both Excel rules). For anything else, put the values in cells and reference the range.
 
 ## Excel tables
 
@@ -215,7 +219,7 @@ ws['!tables'] = [{
 }];
 ```
 
-Header cells are written as the column names, and totals cells get `SUBTOTAL()` formulas. Table names must be unique and must not look like cell references.
+Header cells are written as the column names, and totals cells get `SUBTOTAL()` formulas. For your own totals formula, use `{ totalsRowFunction: 'custom', totalsRowFormula: 'SUM(Sales[Revenue])*1.1' }`. `calculatedColumnFormula` records a calculated column. Table names must be unique and must not look like cell references.
 
 ## Protection
 
@@ -237,7 +241,7 @@ ws['!images'] = [
 ];
 ```
 
-PNG, JPEG and GIF are supported. Identical images are stored once.
+PNG, JPEG, GIF, BMP, TIFF, EMF and WMF are supported. The size of PNG/JPEG/GIF/BMP images is detected automatically; give `width`/`height` for the others. Identical images are stored once.
 
 ## Charts
 
@@ -256,7 +260,7 @@ ws['!charts'] = [{
 }];
 ```
 
-Series point at worksheet ranges, and their current values are embedded so the chart displays before any recalculation.
+Series point at worksheet ranges (whole columns like `'Data'!$B:$B` included), and their current values are embedded so the chart displays before any recalculation. Series can also hold literal data: `{ name: 'Plan', categories: ['Q1', 'Q2'], values: [10, 12] }`.
 
 ## Pivot tables
 
@@ -295,7 +299,9 @@ All SheetJS CE `utils` are available: `aoa_to_sheet`, `json_to_sheet`, `sheet_ad
 
 ## Differences from SheetJS CE
 
-- **Output formats:** only `.xlsx` (plus CSV/TSV/HTML/JSON) is written. Legacy formats (`.xls`, `.xlsb`, `.ods`, …) are rejected instead of being written with the wrong content.
+- **Output formats:** only `.xlsx`/`.xlsm` (plus CSV/TSV/HTML/JSON) is written. Legacy formats (`.xls`, `.xlsb`, `.ods`, …) are rejected instead of being written with the wrong content. `.xlsm` gets the macro-enabled content type but no VBA project; macros in files that are read are not preserved.
+- **CSV/HTML import:** plain decimals (`1.50`, `-3`, `1e3`) become numbers, but codes with leading zeros (`007`), hex (`0x1F`) and thousands separators stay text. SheetJS converts all of them to numbers.
+- **Whole-column ranges:** `decode_range('A:B')` spans rows 1–1,048,576. SheetJS returns `-1` rows.
 - **`t: 'd'` cells:** these hold real local `Date` objects. SheetJS stores UTC-shifted dates internally; `sheet_to_json` output matches either way.
 - **Sheet names:** duplicates are rejected case-insensitively, as Excel does.
 - **Defaults:** styles, formulas and number formats are read by default, and every cell gets a formatted `w`.

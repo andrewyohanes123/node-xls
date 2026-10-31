@@ -117,7 +117,7 @@ describe('print settings', () => {
     ws['!pageSetup'] = { orientation: 'landscape', paperSize: 9, fitToWidth: 1, fitToHeight: 0 };
     const { ws: back, rep } = await roundtripSheet(ws);
     expect(back['!margins']).toEqual({ left: 0.25, right: 0.25, top: 1, bottom: 1, header: 0.3, footer: 0.3 });
-    expect(back['!pageSetup']).toEqual({ orientation: 'landscape', paperSize: 9, fitToWidth: 1, fitToHeight: 0 });
+    expect(back['!pageSetup']).toEqual({ orientation: 'landscape', paperSize: 9, fitToWidth: 1, fitToHeight: 0, fitToPage: true });
     expect(rep.exceljs.getWorksheet('S')!.pageSetup).toMatchObject({ orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1 });
     expect(rep.sheetjs.Sheets.S['!margins']).toMatchObject({ left: 0.25, top: 1 });
   });

@@ -8,7 +8,7 @@
 import { CellObject, ChartAxisOptions, ChartSeries, Color, SheetChart, WorkSheet } from '../types.js';
 import { WriteContext } from '../xlsx/context.js';
 import { CONTENT_TYPES, NS, REL_TYPES, XML_HEADER, escapeAttr, escapeXml } from '../xlsx/xml.js';
-import { absoluteRef, encode_cell, parseSheetRef } from '../utils/address.js';
+import { absoluteRef, decode_range, encode_cell, parseSheetRef, wholeRangeRef } from '../utils/address.js';
 import { format_cell } from '../utils/format.js';
 import { dateToSerial } from '../utils/dates.js';
 import { resolveAnchor, twoCellAnchorXml } from '../drawing/anchor.js';
@@ -45,9 +45,25 @@ function resolveRef(ctx: WriteContext, ref: string, defaultSheet: string, what: 
   const ws = ctx.wb.Sheets[sheet];
   if (!ws) throw new Error(`Chart ${what}: sheet "${sheet}" not found`);
   const cells: Array<CellObject | undefined> = [];
-  const { s, e } = parsed.range;
+  const { s } = parsed.range;
+  let { e } = parsed.range;
+  if (wholeRangeRef(parsed.range)) {
+    // whole columns/rows: cache only up to the end of the sheet's used range
+    const used = ws['!ref'] ? decode_range(ws['!ref']) : { s, e: s };
+    e = { r: Math.min(e.r, Math.max(used.e.r, s.r)), c: Math.min(e.c, Math.max(used.e.c, s.c)) };
+  }
   for (let r = s.r; r <= e.r; r++) for (let c = s.c; c <= e.c; c++) cells.push(ws[encode_cell({ r, c })]);
   return { f: absoluteRef(sheet, parsed.range), cells };
+}
+
+function numLitXml(values: Array<string | number>): string {
+  const pts = values.map((v, i) => (typeof v === 'number' && Number.isFinite(v) ? `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>` : '')).join('');
+  return `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${pts}</c:numLit>`;
+}
+
+function strLitXml(values: Array<string | number>): string {
+  const pts = values.map((v, i) => `<c:pt idx="${i}"><c:v>${escapeXml(String(v))}</c:v></c:pt>`).join('');
+  return `<c:strLit><c:ptCount val="${values.length}"/>${pts}</c:strLit>`;
 }
 
 const isRef = (s: string) => /!\$?[A-Za-z]{1,3}\$?\d+/.test(s);
@@ -78,7 +94,8 @@ function strRefXml(r: ResolvedRef): string {
 }
 
 /** Category/x data: numeric caches when every cell is numeric, string caches otherwise. */
-function axisDataXml(ctx: WriteContext, tag: string, ref: string, sheet: string): string {
+function axisDataXml(ctx: WriteContext, tag: string, ref: string | Array<string | number>, sheet: string): string {
+  if (Array.isArray(ref)) return `<c:${tag}>${ref.every((v) => typeof v === 'number') ? numLitXml(ref) : strLitXml(ref)}</c:${tag}>`;
   const r = resolveRef(ctx, ref, sheet, tag);
   const numeric = r.cells.every((c) => c === undefined || numberOf(ctx, c) !== undefined);
   return `<c:${tag}>${numeric ? numRefXml(ctx, r) : strRefXml(r)}</c:${tag}>`;
@@ -125,9 +142,10 @@ function markerXml(s: ChartSeries, i: number, defaultOn: boolean): string {
 
 function seriesXml(ctx: WriteContext, chart: SheetChart, s: ChartSeries, i: number, sheet: string): string {
   const head = `<c:idx val="${i}"/><c:order val="${i}"/>${seriesTextXml(ctx, s.name, sheet)}${seriesSpPr(chart.type, s, i)}`;
-  const values = resolveRef(ctx, s.values, sheet, 'values');
-  const cat = s.categories ? axisDataXml(ctx, chart.type === 'scatter' ? 'xVal' : 'cat', s.categories, sheet) : '';
-  const val = `<c:${chart.type === 'scatter' ? 'yVal' : 'val'}>${numRefXml(ctx, values)}</c:${chart.type === 'scatter' ? 'yVal' : 'val'}>`;
+  const valTag = chart.type === 'scatter' ? 'yVal' : 'val';
+  const valData = Array.isArray(s.values) ? numLitXml(s.values) : numRefXml(ctx, resolveRef(ctx, s.values, sheet, 'values'));
+  const cat = s.categories !== undefined ? axisDataXml(ctx, chart.type === 'scatter' ? 'xVal' : 'cat', s.categories, sheet) : '';
+  const val = `<c:${valTag}>${valData}</c:${valTag}>`;
   switch (chart.type) {
     case 'column':
     case 'bar':

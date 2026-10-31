@@ -1,3 +1,4 @@
+import { XML_READ_OPTIONS } from './xml.js';
 import { strFromU8 } from 'fflate';
 import { XMLParser } from 'fast-xml-parser';
 import { resolveTarget, relsPathFor } from './package.js';
@@ -10,10 +11,7 @@ export interface Rel {
 }
 
 const relsParser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  parseTagValue: false,
-  trimValues: false,
+  ...XML_READ_OPTIONS,
   isArray: (n) => n === 'Relationship',
 });
 

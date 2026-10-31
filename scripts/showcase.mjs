@@ -40,7 +40,7 @@ section('01-values', () => {
     ['negative', -1234.5, '-1234.5'],
     ['large', 12345678901234, '1.23457E+13 or full'],
     ['boolean', true, 'TRUE'],
-    ['NaN', NaN, '#NUM!'],
+    ['NaN', NaN, '#VALUE! (SheetJS rule for NaN)'],
     ['formula', null, '=SUM(B9:B11) → -1189.35859'],
     ['formula w/ =', null, '=B9*2 → 84'],
     ['string formula', null, '=CONCATENATE("a","b") → ab'],
