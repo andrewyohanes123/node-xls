@@ -1,11 +1,25 @@
 {
   "name": "node-xls",
-  "version": "0.0.1",
-  "description": "Full-featured XLSX library compatible with SheetJS xlsx, with first-class cell styling and pivot tables.",
+  "version": "0.1.0",
+  "description": "XLSX reader/writer with a SheetJS-compatible API plus the features SheetJS reserves for Pro: cell styling, rich text, conditional formatting, data validation, tables, images, charts and pivot tables.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:tz": "TZ=UTC vitest run && TZ=Asia/Jakarta vitest run && TZ=America/New_York vitest run && TZ=Pacific/Kiritimati vitest run",
@@ -25,7 +39,11 @@
     "styling",
     "sheetjs",
     "styles",
-    "openxml"
+    "openxml",
+    "charts",
+    "images",
+    "conditional-formatting",
+    "data-validation"
   ],
   "author": "andrew.yohanes123@gmail.com",
   "license": "MIT",

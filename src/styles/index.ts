@@ -184,7 +184,11 @@ export class StyleBuilder {
   }
 
   registerNumFmt(fmt: string | number): number {
-    if (typeof fmt === 'number') return fmt;
+    if (typeof fmt === 'number') {
+      // ids < 164 are Excel built-ins; custom ids only exist inside the workbook that defined them
+      if (Number.isInteger(fmt) && fmt >= 0 && fmt < 164) return fmt;
+      throw new Error(`numFmt ${fmt} is not a built-in format id (0-163); pass the format code string instead`);
+    }
     const builtin = builtinFormatId(fmt);
     if (builtin !== undefined) return builtin;
     const hit = this.numFmtIds.get(fmt);

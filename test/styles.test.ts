@@ -180,6 +180,12 @@ describe('number formats', () => {
     expect(back.C1.z).toBe('$#,##0.00');
   });
 
+  it('numeric ids must be built-in', async () => {
+    await expect(styled({ numFmt: 200 })).rejects.toThrow(/not a built-in format id/);
+    const { rep } = await styled({ numFmt: 44 }, 1.5); // locale-dependent accounting format, implicit in Excel
+    expect(rep.xml('xl/styles.xml')).toMatch(/<xf numFmtId="44" /);
+  });
+
   it('s.numFmt takes precedence over cell.z', async () => {
     const ws = utils.aoa_to_sheet([[0.5]]);
     ws.A1.z = '0%';
