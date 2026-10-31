@@ -1,5 +1,5 @@
 {
-  "name": "node-xls",
+  "name": "node-xlsx",
   "version": "0.1.0",
   "description": "XLSX reader/writer with a SheetJS-compatible API plus the features SheetJS reserves for Pro: cell styling, rich text, conditional formatting, data validation, tables, images, charts and pivot tables.",
   "main": "dist/index.js",
