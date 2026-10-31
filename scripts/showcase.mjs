@@ -355,6 +355,40 @@ section('11-images', () => {
 });
 
 // ---------------------------------------------------------------------------
+section('12-charts', (wb) => {
+  const data = utils.aoa_to_sheet([
+    ['Month', 'North', 'South', 'West', 'Share'],
+    ['Jan', 120, 80, 60, 0.42],
+    ['Feb', 135, 95, 72, 0.33],
+    ['Mar', 150, 70, 88, 0.25],
+    ['Apr', 160, 110, 91, null],
+    ['May', 172, 125, 99, null],
+  ]);
+  utils.set_range_style(data, 'A1:E1', head);
+  data['!cols'] = [{ wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }];
+  utils.book_append_sheet(wb, data, 'Chart Data');
+  const S = "'Chart Data'!";
+  const regions = ['B', 'C', 'D'].map((c) => ({ name: `${S}$${c}$1`, categories: `${S}$A$2:$A$6`, values: `${S}$${c}$2:$${c}$6` }));
+  const dash = utils.aoa_to_sheet([['Chart gallery (data on "Chart Data")']]);
+  utils.set_cell_style(dash, 'A1', title);
+  const w = { width: 380, height: 230 };
+  dash['!charts'] = [
+    { type: 'column', title: 'Clustered column', series: regions, anchor: { from: 'A3', ...w }, yAxis: { title: 'Units' } },
+    { type: 'bar', grouping: 'stacked', title: 'Stacked bar', series: regions, anchor: { from: 'H3', ...w }, legend: 'b' },
+    { type: 'line', title: 'Line with markers', series: regions.map((s) => ({ ...s, marker: true })), anchor: { from: 'A16', ...w }, yAxis: { min: 0, max: 200 } },
+    { type: 'area', grouping: 'stacked', title: 'Stacked area', series: regions, anchor: { from: 'H16', ...w } },
+    { type: 'pie', title: 'Pie (share)', series: [{ categories: `${S}$A$2:$A$4`, values: `${S}$E$2:$E$4` }], anchor: { from: 'A29', ...w }, dataLabels: true },
+    { type: 'doughnut', title: 'Doughnut', series: [{ categories: `${S}$A$2:$A$4`, values: `${S}$E$2:$E$4` }], anchor: { from: 'H29', ...w }, holeSize: 55 },
+    { type: 'scatter', title: 'Scatter North vs South', series: [{ name: 'N/S', categories: `${S}$B$2:$B$6`, values: `${S}$C$2:$C$6` }], anchor: { from: 'A42', ...w }, xAxis: { title: 'North' }, yAxis: { title: 'South' }, legend: false },
+    { type: 'column', grouping: 'percentStacked', title: '100% stacked + custom colors', series: regions.map((s, i) => ({ ...s, color: ['1F4E78', '2E75B6', '9DC3E6'][i] })), anchor: { from: 'H42', ...w }, dataLabels: true },
+  ];
+  dash['!pageSetup'] = { fitToWidth: 1, fitToHeight: 0 };
+  utils.book_append_sheet(wb, dash, 'Dashboard');
+  wb.Workbook = { Views: [{ activeTab: 1 }] };
+  return null;
+});
+
+// ---------------------------------------------------------------------------
 section('13-pivots', (wb) => {
   const data = [];
   const regions = ['East', 'West', 'North'];
