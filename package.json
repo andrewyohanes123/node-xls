@@ -7,7 +7,13 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:tz": "TZ=UTC vitest run && TZ=Asia/Jakarta vitest run && TZ=America/New_York vitest run",
+    "test:lo": "npm run showcase && scripts/render.sh",
+    "schemas": "scripts/fetch-schemas.sh",
+    "showcase": "npm run build && node scripts/showcase.mjs",
+    "inspect": "node scripts/inspect.mjs",
+    "render": "scripts/render.sh"
   },
   "keywords": [
     "xlsx",
@@ -25,12 +31,13 @@
   "dependencies": {
     "fast-xml-parser": "^5.11.2",
     "fflate": "^0.8.3",
-    "jszip": "^3.10.2"
+    "ssf": "^0.11.2"
   },
   "devDependencies": {
-    "@types/jszip": "^3.4.0",
     "@types/node": "^26.6.6",
+    "exceljs": "^4.4.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
