@@ -1,0 +1,36 @@
+{
+  "name": "node-xls",
+  "version": "0.0.1",
+  "description": "Full-featured XLSX library compatible with SheetJS xlsx, with first-class cell styling and pivot tables.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "xlsx",
+    "excel",
+    "spreadsheet",
+    "pivot",
+    "pivot-table",
+    "styling",
+    "sheetjs",
+    "styles",
+    "openxml"
+  ],
+  "author": "andrew.yohanes123@gmail.com",
+  "license": "MIT",
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2",
+    "fflate": "^0.8.3",
+    "jszip": "^3.10.2"
+  },
+  "devDependencies": {
+    "@types/jszip": "^3.4.0",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
