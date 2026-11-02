@@ -50,6 +50,10 @@
     "conditional-formatting",
     "data-validation"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrewyohanes123/node-xls"
+  },
   "author": "andrew.yohanes123@gmail.com",
   "license": "MIT",
   "dependencies": {
