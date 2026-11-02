@@ -1,5 +1,5 @@
 {
-  "name": "node-xlsx",
+  "name": "@youstead/node-xlsx",
   "version": "0.1.0",
   "description": "XLSX reader/writer with a SheetJS-compatible API plus the features SheetJS reserves for Pro: cell styling, rich text, conditional formatting, data validation, tables, images, charts and pivot tables.",
   "main": "dist/index.js",
@@ -13,8 +13,12 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -28,7 +32,8 @@
     "showcase": "npm run build && node scripts/showcase.mjs",
     "inspect": "node scripts/inspect.mjs",
     "render": "scripts/render.sh",
-    "excel-check": "npm run showcase && node scripts/excel-check.mjs"
+    "excel-check": "npm run showcase && node scripts/excel-check.mjs",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "xlsx",

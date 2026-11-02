@@ -24,15 +24,15 @@ Read and write `.xlsx` files with a [SheetJS](https://www.npmjs.com/package/xlsx
 ## Install
 
 ```bash
-npm install node-xls
+npm install @youstead/node-xlsx
 ```
 
-Node.js 18 or newer. node-xls works with CommonJS (`require('node-xls')`) and ESM (`import XLSX, { utils } from 'node-xls'`).
+Node.js 18 or newer. node-xls works with CommonJS (`require('@youstead/node-xlsx')`) and ESM (`import XLSX, { utils } from '@youstead/node-xlsx'`).
 
 ## Quick start
 
 ```ts
-import XLSX, { utils } from 'node-xls';
+import XLSX, { utils } from '@youstead/node-xlsx';
 
 const ws = utils.json_to_sheet([
   { Region: 'East', Category: 'Furniture', Sales: 1200, Profit: 300 },
